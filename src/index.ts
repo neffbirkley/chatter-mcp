@@ -11,6 +11,24 @@ async function main(): Promise<void> {
 
   const server = createServer({ db });
   const transport = new StdioServerTransport();
+
+  // Close the DB on exit so WAL is checkpointed and no -wal/-shm files leak.
+  let closing = false;
+  const shutdown = async () => {
+    if (closing) return;
+    closing = true;
+    try {
+      await server.close();
+      await db.destroy();
+    } finally {
+      process.exit(0);
+    }
+  };
+  // Client disconnect (stdin EOF) and process signals both trigger cleanup.
+  transport.onclose = shutdown;
+  process.once("SIGINT", shutdown);
+  process.once("SIGTERM", shutdown);
+
   await server.connect(transport);
   // stdout is the MCP protocol channel — never write to it. Logs go to stderr.
   process.stderr.write("chatter: ready on stdio\n");

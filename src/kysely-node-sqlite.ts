@@ -101,7 +101,12 @@ class NodeSqliteDriver implements Driver {
   }
 
   async beginTransaction(connection: DatabaseConnection): Promise<void> {
-    await connection.executeQuery(CompiledQueryFactory.raw("BEGIN"));
+    // IMMEDIATE takes the write lock at BEGIN so `busy_timeout` serializes
+    // concurrent read-modify-write transactions across processes. A deferred
+    // BEGIN defers the write lock until first write, by which point another
+    // writer may have invalidated the snapshot — an unretryable
+    // SQLITE_BUSY_SNAPSHOT that `busy_timeout` cannot absorb.
+    await connection.executeQuery(CompiledQueryFactory.raw("BEGIN IMMEDIATE"));
   }
 
   async commitTransaction(connection: DatabaseConnection): Promise<void> {
