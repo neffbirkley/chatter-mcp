@@ -9,6 +9,11 @@ on:
 permissions:
   contents: read
 
+# Serialize releases per ref so two quick pushes can't race the npm publish.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   verify:
     runs-on: ubuntu-latest
@@ -43,9 +48,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24.13.0
-          registry-url: https://registry.npmjs.org
       - run: bun install --frozen-lockfile
       - run: bun run build
+      # @semantic-release/npm authenticates via NPM_TOKEN and writes its own
+      # .npmrc; setup-node's registry-url is omitted to avoid a conflicting one.
       - run: npx semantic-release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
