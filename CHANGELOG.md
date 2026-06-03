@@ -1,3 +1,14 @@
+# [1.2.0](https://github.com/neffbirkley/chatter-mcp/compare/v1.1.0...v1.2.0) (2026-06-03)
+
+### Bug Fixes
+
+- address split-packages review findings ([774aa8e](https://github.com/neffbirkley/chatter-mcp/commit/774aa8e1f1bb2db8e4591955df3a754896666c1b))
+- resolve core as a build input and fix npm-in-bun-workspace release ([3582349](https://github.com/neffbirkley/chatter-mcp/commit/35823496b04204b00ed081f58209df854c3d0476))
+
+### Features
+
+- add @neffbirkley/chatter-cli ([7837279](https://github.com/neffbirkley/chatter-mcp/commit/7837279586848d0195eaae381f4f66b22db72fbb))
+
 # [1.1.0](https://github.com/neffbirkley/chatter-mcp/compare/v1.0.0...v1.1.0) (2026-06-03)
 
 ### Bug Fixes
