@@ -1,0 +1,6 @@
+# Prettier handles markdown ONLY. Biome owns code + JSON.
+*
+!*.md
+!**/*.md
+node_modules/
+dist/
