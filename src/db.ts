@@ -28,10 +28,25 @@ export function openDb(path = resolveDbPath()): Database {
   }
 
   const raw = new DatabaseSync(path);
-  raw.exec("PRAGMA journal_mode = WAL");
-  raw.exec("PRAGMA busy_timeout = 5000");
-  raw.exec("PRAGMA foreign_keys = ON");
-  applySchema(raw);
+  raw.exec("PRAGMA busy_timeout = 15000");
+
+  // Cold-start can race when several processes first open a brand-new file at
+  // once: `PRAGMA journal_mode = WAL` does NOT honor busy_timeout and returns
+  // "database is locked" immediately if another connection is active. The setup
+  // is idempotent, so retry until one process settles the file and the rest see
+  // it. Steady-state contention is handled by busy_timeout, not this loop.
+  for (let attempt = 0; ; attempt++) {
+    try {
+      raw.exec("PRAGMA journal_mode = WAL");
+      raw.exec("PRAGMA foreign_keys = ON");
+      applySchema(raw);
+      break;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (attempt >= 50 || !/lock|busy/i.test(msg)) throw err;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+    }
+  }
 
   return new Kysely<DB>({ dialect: new NodeSqliteDialect(raw) });
 }

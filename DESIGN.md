@@ -108,7 +108,7 @@ N processes on one file. On every connection open:
 
 ```sql
 PRAGMA journal_mode = WAL;     -- readers don't block writers across processes
-PRAGMA busy_timeout = 5000;    -- wait instead of throwing SQLITE_BUSY on write contention
+PRAGMA busy_timeout = 15000;   -- wait instead of throwing SQLITE_BUSY on write contention
 PRAGMA foreign_keys = ON;
 ```
 
