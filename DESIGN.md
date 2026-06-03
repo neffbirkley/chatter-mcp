@@ -27,14 +27,15 @@ Stdio MCP servers are **launched by the client**. Each agent session spawns its 
 ## Stack
 
 - **Runtime:** Node `24.13.0` (pinned, latest 24.x). `engines.node >=24`.
-- **Build tool:** Bun `1.3.10` (dev/build/test only — must NOT leak into runtime deps).
+- **Monorepo:** bun workspaces — `chatter-core` (private) + `@neffbirkley/chatter-mcp` + `@neffbirkley/chatter-cli`.
+- **Build tool:** **tsdown** bundles each published package's `dist` (ESM `.mjs`), inlining `chatter-core`; runtime deps stay external. Bun `1.3.10` for install/scripts/test.
 - **MCP:** `@modelcontextprotocol/sdk` (ESM-only).
-- **DB:** `node:sqlite` (built-in, zero native dep) + **Kysely** query builder over a **vendored ~110-line dialect** (`src/kysely-node-sqlite.ts`). See decision below.
+- **DB:** `node:sqlite` (built-in, zero native dep) + **Kysely** query builder over a **vendored ~110-line dialect** (`core/src/kysely-node-sqlite.ts`). See decision below.
 - **Validation:** `zod` (MCP SDK already depends on it).
 - **Lint/format:** Biome (code), Prettier (markdown ONLY — disjoint globs, no overlap with Biome).
 - **Hooks:** lefthook → Biome + commitlint on commit.
 - **Commits:** Conventional Commits, enforced by commitlint.
-- **Release:** semantic-release + GitHub Actions, npm provenance.
+- **Release:** semantic-release (lockstep, both packages one version) + GitHub Actions, npm OIDC + provenance.
 
 ### Dependency pinning
 
@@ -131,51 +132,47 @@ No background timer (process is short-lived, N copies — a timer is wrong). Swe
 
 ## Distribution
 
-- `bin` entry + `#!/usr/bin/env node` shebang + executable bit → launches as `npx @neffbirkley/chatter-mcp` (bin name `chatter`).
-- Ship ESM JS + `.d.ts`. Build via Bun (or tsdown) + `tsc` for types.
-- `files: ["dist"]` — publish only build output, not source.
-- `publishConfig.access: public` (if scoped).
-- CI publish with `id-token: write` + `npm publish --provenance`.
+- Two published packages, each bin-only: `@neffbirkley/chatter-mcp` (bin `chatter-mcp`, the stdio server) and `@neffbirkley/chatter-cli` (bin `chatter`, the CLI). `#!/usr/bin/env node` shebang + executable bit preserved by tsdown.
+- **tsdown** bundles each `dist/index.mjs` (ESM), inlining `chatter-core` (a devDependency); runtime deps (`@modelcontextprotocol/sdk`, `kysely`, `zod`) stay external. No `.d.ts` (bin-only).
+- `files: ["dist"]` — publish only build output, not source. `publishConfig.access: public`.
+- **Lockstep release:** one semantic-release run, two `@semantic-release/npm` `pkgRoot` instances, publishes both at the same version/tag (`v${version}`). Correct because both bundle the same core.
+- CI publish via **npm OIDC trusted publishing** (`id-token: write`, no token) + automatic provenance. Each package needs a Trusted Publisher registered on npm; a brand-new package must be bootstrapped with a one-time token publish first.
 
 ## stdout is sacred
 
 Stdio MCP uses **stdout for protocol framing**. ANY stray stdout corrupts the stream. ALL logging → **stderr**. No `console.log`. This is the top runtime footgun.
 
-## CI (GitHub Actions)
+## CI (GitHub Actions) — `.github/workflows/main-ci.yml`
 
-- **PR gate:** install (frozen lockfile) → Biome lint → `tsc` typecheck → `bun test` (incl. a multi-process WAL concurrency test) → build.
-- **Release (main):** gates + semantic-release → npm publish (provenance) + GitHub release + CHANGELOG. Secrets: `NPM_TOKEN`, `GITHUB_TOKEN`.
+- **verify (PR + push):** `bun install --frozen-lockfile` → lint → typecheck → test (incl. a multi-process WAL concurrency test) → build. Root scripts fan out over workspaces via `bun --filter`.
+- **release (push to main):** gates + `semantic-release` (lockstep) → OIDC publish both packages with provenance + GitHub release + CHANGELOG. `id-token: write`, `fetch-depth: 0`; only secret is the built-in `GITHUB_TOKEN`.
 
 ## Project layout
 
 ```
-chatter/
-├── src/
-│   ├── index.ts        # entry: shebang, server bootstrap, stdio transport
-│   ├── server.ts       # MCP server + four tool registrations
-│   ├── db.ts                 # node:sqlite open, PRAGMAs, mkdir, schema apply, Kysely wrap
-│   ├── schema.ts             # DDL + Kysely table types + user_version bootstrap
-│   ├── kysely-node-sqlite.ts # vendored Kysely dialect — the only cast boundary
-│   ├── store.ts              # open/send/recv/list query logic (Kysely)
-│   └── cleanup.ts      # opportunistic sweep
-├── tests/
-│   ├── tools.test.ts
-│   ├── concurrency.test.ts
-│   ├── _writer.ts      # child: concurrent writers
-│   └── _race_worker.ts # child: concurrent recv+send contention
-├── .github/workflows/ci.yml
-├── biome.json
-├── lefthook.yml
-├── commitlint.config.js
-├── .releaserc.json
-├── .nvmrc              # 24.13.0
-├── .prettierrc         # markdown only
-├── tsconfig.json
-├── package.json
-├── README.md
-├── LICENSE
-└── DESIGN.md
+chatter/ (bun workspace root)
+├── packages/
+│   ├── core/                    # chatter-core (private) — transport-agnostic
+│   │   ├── src/
+│   │   │   ├── index.ts         # public API barrel
+│   │   │   ├── db.ts            # node:sqlite open, PRAGMAs, mkdir, Kysely wrap
+│   │   │   ├── schema.ts        # DDL + Kysely table types + migration
+│   │   │   ├── kysely-node-sqlite.ts # vendored dialect — the only cast boundary
+│   │   │   ├── store.ts         # open/send/recv/peek/list + leases
+│   │   │   └── cleanup.ts       # opportunistic sweep
+│   │   └── tests/               # tools + multi-process concurrency tests
+│   ├── mcp/                     # @neffbirkley/chatter-mcp (bin chatter-mcp)
+│   │   └── src/{index,server}.ts  # stdio bootstrap + tool registrations
+│   └── cli/                     # @neffbirkley/chatter-cli (bin chatter)
+│       └── src/index.ts         # argv → core
+├── .github/workflows/main-ci.yml
+├── tsconfig.base.json           # + per-package tsconfig.json
+├── biome.json · lefthook.yml · commitlint.config.js · .releaserc.json
+├── .nvmrc (24.13.0) · .prettierrc · package.json (workspaces)
+├── README.md · LICENSE · DESIGN.md
 ```
+
+Each `packages/{mcp,cli}` has its own `package.json` + `tsdown.config.ts`; `chatter-core` is their `workspace:*` devDependency, inlined at build.
 
 ## Out of scope (v1)
 
@@ -186,7 +183,7 @@ chatter/
 
 ## Decisions during build
 
-- **Kysely, with a vendored dialect (2026-06-03).** Use Kysely for typed query building and cast-free domain code. Rather than depend on the only published node:sqlite dialect (`kysely-node-sqlite`, single-maintainer, ~10 months stale, pulls in `async-mutex`), we vendor `src/kysely-node-sqlite.ts` (~110 lines): reuse Kysely's own `SqliteAdapter`/`SqliteQueryCompiler`/`SqliteIntrospector`, add a thin synchronous driver over `DatabaseSync` and a single shared connection serialized by an inlined promise mutex. Only added runtime dep: `kysely`. The only type assertions in the whole codebase live in that one boundary file.
+- **Kysely, with a vendored dialect (2026-06-03).** Use Kysely for typed query building and cast-free domain code. Rather than depend on the only published node:sqlite dialect (`kysely-node-sqlite`, single-maintainer, ~10 months stale, pulls in `async-mutex`), we vendor `packages/core/src/kysely-node-sqlite.ts` (~110 lines): reuse Kysely's own `SqliteAdapter`/`SqliteQueryCompiler`/`SqliteIntrospector`, add a thin synchronous driver over `DatabaseSync` and a single shared connection serialized by an inlined promise mutex. Only added runtime dep: `kysely`. The only type assertions in the whole codebase live in that one boundary file.
   - **Reader detection:** the dialect routes a statement to `.all()` vs `.run()` by `stmt.columns().length > 0`, not by Kysely's query-node kind. The node-kind approach misclassifies raw `sql\`SELECT …\``(compiled as`RawNode`) as a non-select and silently returns no rows; `columns()` is correct for both builder and raw selects.
   - **recv atomicity:** read-cursor-then-advance runs inside a Kysely transaction; the driver's mutex holds the connection for the transaction's duration so concurrent reads can't interleave (a regression risk introduced by going async that the prior fully-synchronous version didn't have).
 

@@ -31,7 +31,7 @@ resumes from your last read position.
 
 ## Use
 
-Requires **Node ≥ 24**. Register with your harness:
+Requires **Node ≥ 24**. Register the MCP server with your harness:
 
 ```json
 {
@@ -44,16 +44,57 @@ Requires **Node ≥ 24**. Register with your harness:
 State lives in `~/.chatter/db.sqlite` (override with `CHATTER_DB`). Channels idle for 7 days are
 pruned automatically.
 
+## CLI
+
+`@neffbirkley/chatter-cli` (bin `chatter`) is the same channels over a command line — for shells,
+scripts, and harness hooks that can't speak MCP per-prompt:
+
+```bash
+npx @neffbirkley/chatter-cli open inbox alice          # -> { ...token }
+chatter send inbox alice <token> "ping"
+chatter recv inbox alice <token>                       # JSON, advances your cursor
+chatter list                                           # discover channels + members
+```
+
+Same model and store as the server (open → token, then send/recv/peek/list). Output is JSON.
+
+**Polling hook** — chatter never pushes, so an agent only sees messages when it reads. Wire a hook
+to inject unread into its context each turn:
+
+```json
+// .claude/settings.json
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [{ "type": "command", "command": "chatter recv inbox my-session <token> || true" }]
+      }
+    ]
+  }
+}
+```
+
+## Packages
+
+A bun-workspace monorepo. `chatter-core` (private) holds the transport-agnostic logic; the two
+published packages are thin wrappers that bundle it in (via tsdown), so core is never published.
+
+| Package                    | bin           | What                       |
+| -------------------------- | ------------- | -------------------------- |
+| `@neffbirkley/chatter-mcp` | `chatter-mcp` | MCP server (stdio)         |
+| `@neffbirkley/chatter-cli` | `chatter`     | CLI over the same channels |
+
 ## Develop
 
 ```bash
 bun install
-bun run test     # runs under Node for node:sqlite fidelity
-bun run build
+bun run typecheck   # all packages
+bun run test        # core tests, under Node for node:sqlite fidelity
+bun run build       # tsdown bundles each package's dist
 ```
 
-`.mcp.json` runs the local `dist/` build against a gitignored `.chatter-test.sqlite`. Rebuild after
-changes — it runs compiled output, not source.
+`.mcp.json` runs the local `packages/mcp/dist` build against a gitignored `.chatter-test.sqlite`.
+Rebuild after changes — it runs compiled output, not source.
 
 ## License
 
