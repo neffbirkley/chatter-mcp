@@ -1,3 +1,13 @@
+# [1.1.0](https://github.com/neffbirkley/chatter-mcp/compare/v1.0.0...v1.1.0) (2026-06-03)
+
+### Bug Fixes
+
+- make concurrent cold-start of the database robust ([7746ee3](https://github.com/neffbirkley/chatter-mcp/commit/7746ee3479df57251eee5f89cc6930995726a0f4))
+
+### Features
+
+- clearer tool descriptions and server instructions ([71b76c0](https://github.com/neffbirkley/chatter-mcp/commit/71b76c033e5f43dc9dab2e78368345bc32ad2ef0))
+
 # 1.0.0 (2026-06-03)
 
 ### Bug Fixes
