@@ -131,7 +131,7 @@ No background timer (process is short-lived, N copies — a timer is wrong). Swe
 
 ## Distribution
 
-- `bin` entry + `#!/usr/bin/env node` shebang + executable bit → launches as `npx chatter-mcp`.
+- `bin` entry + `#!/usr/bin/env node` shebang + executable bit → launches as `npx @neffbirkley/chatter-mcp` (bin name `chatter`).
 - Ship ESM JS + `.d.ts`. Build via Bun (or tsdown) + `tsc` for types.
 - `files: ["dist"]` — publish only build output, not source.
 - `publishConfig.access: public` (if scoped).

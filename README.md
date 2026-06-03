@@ -36,7 +36,7 @@ Requires **Node ≥ 24**. Register with your harness:
 ```json
 {
   "mcpServers": {
-    "chatter": { "command": "npx", "args": ["-y", "chatter-mcp"] }
+    "chatter": { "command": "npx", "args": ["-y", "@neffbirkley/chatter-mcp"] }
   }
 }
 ```

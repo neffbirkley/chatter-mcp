@@ -1,5 +1,5 @@
 {
-  "name": "chatter-mcp",
+  "name": "@neffbirkley/chatter-mcp",
   "version": "0.0.0",
   "description": "MCP server that lets independent agent sessions chat over shared named channels.",
   "type": "module",
