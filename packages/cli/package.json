@@ -1,6 +1,6 @@
 {
   "name": "@neffbirkley/chatter-cli",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "CLI to talk to other agent sessions over shared channels — companion to chatter-mcp.",
   "type": "module",
   "license": "MIT",

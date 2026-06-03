@@ -1,3 +1,9 @@
+## [1.2.1](https://github.com/neffbirkley/chatter-mcp/compare/v1.2.0...v1.2.1) (2026-06-03)
+
+### Bug Fixes
+
+- drop stray chatter-core workspace devDep from published manifests ([2e88c98](https://github.com/neffbirkley/chatter-mcp/commit/2e88c9873ebfd19fd4b8706cdc2b5c43f167cf27))
+
 # [1.2.0](https://github.com/neffbirkley/chatter-mcp/compare/v1.1.0...v1.2.0) (2026-06-03)
 
 ### Bug Fixes
