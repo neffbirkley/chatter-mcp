@@ -7,7 +7,7 @@ import { createServer } from "./server.js";
 async function main(): Promise<void> {
   const db = openDb();
   // Prune stale channels once at startup; `send` keeps it swept thereafter.
-  sweep(db, Date.now(), { force: true });
+  await sweep(db, Date.now(), { force: true });
 
   const server = createServer({ db });
   const transport = new StdioServerTransport();

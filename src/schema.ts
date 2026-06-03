@@ -1,7 +1,40 @@
 import type { DatabaseSync } from "node:sqlite";
+import type { Generated } from "kysely";
 
 /** Bump when the DDL below changes in a non-additive way. */
 export const SCHEMA_VERSION = 1;
+
+export interface ChannelsTable {
+  name: string;
+  created_at: number;
+  last_activity: number;
+}
+
+export interface MessagesTable {
+  id: Generated<number>;
+  channel: string;
+  sender: string;
+  text: string;
+  ts: number;
+}
+
+export interface CursorsTable {
+  channel: string;
+  participant: string;
+  last_seen_id: Generated<number>;
+}
+
+export interface MetaTable {
+  key: string;
+  value: number;
+}
+
+export interface DB {
+  channels: ChannelsTable;
+  messages: MessagesTable;
+  cursors: CursorsTable;
+  meta: MetaTable;
+}
 
 const DDL = `
 CREATE TABLE IF NOT EXISTS channels (

@@ -29,7 +29,7 @@ Stdio MCP servers are **launched by the client**. Each agent session spawns its 
 - **Runtime:** Node `24.13.0` (pinned, latest 24.x). `engines.node >=24`.
 - **Build tool:** Bun `1.3.10` (dev/build/test only — must NOT leak into runtime deps).
 - **MCP:** `@modelcontextprotocol/sdk` (ESM-only).
-- **DB:** `node:sqlite` (built-in, zero native dep). **No query builder** — prepared statements direct (see decision below).
+- **DB:** `node:sqlite` (built-in, zero native dep) + **Kysely** query builder over a **vendored ~110-line dialect** (`src/kysely-node-sqlite.ts`). See decision below.
 - **Validation:** `zod` (MCP SDK already depends on it).
 - **Lint/format:** Biome (code), Prettier (markdown ONLY — disjoint globs, no overlap with Biome).
 - **Hooks:** lefthook → Biome + commitlint on commit.
@@ -42,7 +42,7 @@ All deps installed at **fixed exact versions** (no `^`/`~`). Node pinned to `24.
 
 ### Final dep list
 
-- **Runtime:** `@modelcontextprotocol/sdk`, `zod`. (`node:sqlite` = built-in, no package.)
+- **Runtime:** `@modelcontextprotocol/sdk`, `kysely`, `zod`. (`node:sqlite` = built-in, no package; the dialect is vendored, not a dependency.)
 - **Dev:** `biome`, `prettier`, `lefthook`, `@commitlint/cli`, `@commitlint/config-conventional`, `semantic-release` (+ commit-analyzer, release-notes-generator, npm, github, changelog plugins), `typescript`, `@modelcontextprotocol/inspector`, `@types/node`.
 
 ## Identity
@@ -142,10 +142,10 @@ agent-mailbox/
 ├── src/
 │   ├── index.ts        # entry: shebang, server bootstrap, stdio transport
 │   ├── server.ts       # MCP server + four tool registrations
-│   ├── db.ts           # node:sqlite open, PRAGMAs, mkdir, schema apply
-│   ├── schema.ts       # DDL + user_version bootstrap
-│   ├── sqlite.ts       # typed all/get/run helpers — the only cast boundary
-│   ├── store.ts        # open/send/recv/list query logic
+│   ├── db.ts                 # node:sqlite open, PRAGMAs, mkdir, schema apply, Kysely wrap
+│   ├── schema.ts             # DDL + Kysely table types + user_version bootstrap
+│   ├── kysely-node-sqlite.ts # vendored Kysely dialect — the only cast boundary
+│   ├── store.ts              # open/send/recv/list query logic (Kysely)
 │   └── cleanup.ts      # opportunistic sweep
 ├── tests/
 │   ├── tools.test.ts
@@ -175,7 +175,9 @@ agent-mailbox/
 
 ## Decisions during build
 
-- **Kysely dropped (2026-06-03).** The community node:sqlite Kysely dialect is unproven on Node 24 and added build risk for no payoff over a 4-table / ~5-query schema. Using `node:sqlite` prepared statements directly. All DB access isolated in `src/db.ts` + `src/schema.ts`, so reintroducing a query builder later is a localized change. Revisit if schema grows.
+- **Kysely, with a vendored dialect (2026-06-03).** Use Kysely for typed query building and cast-free domain code. Rather than depend on the only published node:sqlite dialect (`kysely-node-sqlite`, single-maintainer, ~10 months stale, pulls in `async-mutex`), we vendor `src/kysely-node-sqlite.ts` (~110 lines): reuse Kysely's own `SqliteAdapter`/`SqliteQueryCompiler`/`SqliteIntrospector`, add a thin synchronous driver over `DatabaseSync` and a single shared connection serialized by an inlined promise mutex. Only added runtime dep: `kysely`. The only type assertions in the whole codebase live in that one boundary file.
+  - **Reader detection:** the dialect routes a statement to `.all()` vs `.run()` by `stmt.columns().length > 0`, not by Kysely's query-node kind. The node-kind approach misclassifies raw `sql\`SELECT …\``(compiled as`RawNode`) as a non-select and silently returns no rows; `columns()` is correct for both builder and raw selects.
+  - **recv atomicity:** read-cursor-then-advance runs inside a Kysely transaction; the driver's mutex holds the connection for the transaction's duration so concurrent reads can't interleave (a regression risk introduced by going async that the prior fully-synchronous version didn't have).
 
 ## Open items
 

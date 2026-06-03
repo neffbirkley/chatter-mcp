@@ -1,9 +1,8 @@
 import { createRequire } from "node:module";
-import type { DatabaseSync } from "node:sqlite";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { sweep } from "./cleanup.js";
-import { openDb } from "./db.js";
+import { type Database, openDb } from "./db.js";
 import * as store from "./store.js";
 
 const pkg = createRequire(import.meta.url)("../package.json") as { version: string };
@@ -25,7 +24,7 @@ function json(value: unknown) {
 }
 
 export interface ServerDeps {
-  db?: DatabaseSync;
+  db?: Database;
   now?: () => number;
 }
 
@@ -42,7 +41,7 @@ export function createServer({ db = openDb(), now = Date.now }: ServerDeps = {})
       inputSchema: { channel, as },
     },
     async (args) => {
-      store.open(db, args.channel, args.as, now());
+      await store.open(db, args.channel, args.as, now());
       return json({ ok: true, channel: args.channel, as: args.as });
     },
   );
@@ -55,8 +54,8 @@ export function createServer({ db = openDb(), now = Date.now }: ServerDeps = {})
       inputSchema: { channel, as, text },
     },
     async (args) => {
-      const id = store.send(db, args.channel, args.as, args.text, now());
-      sweep(db, now());
+      const id = await store.send(db, args.channel, args.as, args.text, now());
+      await sweep(db, now());
       return json({ ok: true, id, channel: args.channel });
     },
   );
@@ -70,7 +69,7 @@ export function createServer({ db = openDb(), now = Date.now }: ServerDeps = {})
       inputSchema: { channel, as },
     },
     async (args) => {
-      const messages = store.recv(db, args.channel, args.as);
+      const messages = await store.recv(db, args.channel, args.as);
       return json({ channel: args.channel, count: messages.length, messages });
     },
   );
@@ -83,7 +82,7 @@ export function createServer({ db = openDb(), now = Date.now }: ServerDeps = {})
       inputSchema: { as },
     },
     async (args) => {
-      const channels = store.list(db, args.as);
+      const channels = await store.list(db, args.as);
       return json({ channels });
     },
   );

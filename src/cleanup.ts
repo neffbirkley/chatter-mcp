@@ -1,5 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
-import { get, run } from "./sqlite.js";
+import type { Database } from "./db.js";
 
 /** Channels idle longer than this are pruned. */
 export const INACTIVITY_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -9,18 +8,17 @@ export const SWEEP_THROTTLE_MS = 60 * 60 * 1000;
 
 const LAST_SWEEP_KEY = "last_sweep";
 
-function readMeta(db: DatabaseSync, key: string): number | undefined {
-  return get<{ value: number }>(db, "SELECT value FROM meta WHERE key = ?", key)?.value;
+async function readMeta(db: Database, key: string): Promise<number | undefined> {
+  const row = await db.selectFrom("meta").select("value").where("key", "=", key).executeTakeFirst();
+  return row?.value;
 }
 
-function writeMeta(db: DatabaseSync, key: string, value: number): void {
-  run(
-    db,
-    `INSERT INTO meta (key, value) VALUES (?, ?)
-     ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
-    key,
-    value,
-  );
+async function writeMeta(db: Database, key: string, value: number): Promise<void> {
+  await db
+    .insertInto("meta")
+    .values({ key, value })
+    .onConflict((oc) => oc.column("key").doUpdateSet({ value }))
+    .execute();
 }
 
 /**
@@ -30,15 +28,18 @@ function writeMeta(db: DatabaseSync, key: string, value: number): void {
  *
  * Returns the number of channels deleted, or -1 if skipped by the throttle.
  */
-export function sweep(
-  db: DatabaseSync,
+export async function sweep(
+  db: Database,
   now: number,
   { ttlMs = INACTIVITY_TTL_MS, throttleMs = SWEEP_THROTTLE_MS, force = false } = {},
-): number {
-  const last = readMeta(db, LAST_SWEEP_KEY) ?? 0;
+): Promise<number> {
+  const last = (await readMeta(db, LAST_SWEEP_KEY)) ?? 0;
   if (!force && now - last < throttleMs) return -1;
 
-  const info = run(db, "DELETE FROM channels WHERE last_activity < ?", now - ttlMs);
-  writeMeta(db, LAST_SWEEP_KEY, now);
-  return Number(info.changes);
+  const result = await db
+    .deleteFrom("channels")
+    .where("last_activity", "<", now - ttlMs)
+    .executeTakeFirst();
+  await writeMeta(db, LAST_SWEEP_KEY, now);
+  return Number(result.numDeletedRows);
 }

@@ -13,6 +13,7 @@ if (!dbPath || !sender || !countStr) {
 const db = openDb(dbPath);
 const count = Number(countStr);
 for (let i = 0; i < count; i++) {
-  send(db, "race", sender, `${sender}:${i}`, Date.now());
+  await send(db, "race", sender, `${sender}:${i}`, Date.now());
 }
+await db.destroy();
 process.exit(0);

@@ -35,7 +35,7 @@ test("concurrent writers from separate processes do not collide (WAL + busy_time
   await Promise.all(Array.from({ length: WRITERS }, (_, i) => runWriter(`w${i}`)));
 
   const db = openDb(dbPath);
-  const summary = list(db, "auditor").find((c) => c.channel === "race");
+  const summary = (await list(db, "auditor")).find((c) => c.channel === "race");
   assert.ok(summary, "race channel should exist");
   // Every write from every process landed; none lost to SQLITE_BUSY.
   assert.equal(summary.unread, WRITERS * PER_WRITER);

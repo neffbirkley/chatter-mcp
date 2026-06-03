@@ -1,5 +1,5 @@
-import type { DatabaseSync } from "node:sqlite";
-import { all, get, run } from "./sqlite.js";
+import { sql } from "kysely";
+import type { Database } from "./db.js";
 
 export interface Message {
   id: number;
@@ -16,111 +16,102 @@ export interface ChannelSummary {
 }
 
 /** Ensure a channel row exists and bump its activity timestamp. */
-function touchChannel(db: DatabaseSync, channel: string, now: number): void {
-  run(
-    db,
-    `INSERT INTO channels (name, created_at, last_activity)
-     VALUES (?, ?, ?)
-     ON CONFLICT(name) DO UPDATE SET last_activity = excluded.last_activity`,
-    channel,
-    now,
-    now,
-  );
+async function touchChannel(db: Database, channel: string, now: number): Promise<void> {
+  await db
+    .insertInto("channels")
+    .values({ name: channel, created_at: now, last_activity: now })
+    .onConflict((oc) => oc.column("name").doUpdateSet({ last_activity: now }))
+    .execute();
 }
 
 /** Ensure a channel exists and register a participant's cursor (at 0 if new). */
-export function open(db: DatabaseSync, channel: string, participant: string, now: number): void {
-  touchChannel(db, channel, now);
-  run(
-    db,
-    `INSERT INTO cursors (channel, participant, last_seen_id)
-     VALUES (?, ?, 0)
-     ON CONFLICT(channel, participant) DO NOTHING`,
-    channel,
-    participant,
-  );
+export async function open(
+  db: Database,
+  channel: string,
+  participant: string,
+  now: number,
+): Promise<void> {
+  await touchChannel(db, channel, now);
+  await db
+    .insertInto("cursors")
+    .values({ channel, participant, last_seen_id: 0 })
+    .onConflict((oc) => oc.columns(["channel", "participant"]).doNothing())
+    .execute();
 }
 
 /** Append a message to a channel (auto-creating it) and return its id. */
-export function send(
-  db: DatabaseSync,
+export async function send(
+  db: Database,
   channel: string,
   sender: string,
   text: string,
   now: number,
-): number {
-  touchChannel(db, channel, now);
-  const info = run(
-    db,
-    "INSERT INTO messages (channel, sender, text, ts) VALUES (?, ?, ?, ?)",
-    channel,
-    sender,
-    text,
-    now,
-  );
-  return Number(info.lastInsertRowid);
+): Promise<number> {
+  await touchChannel(db, channel, now);
+  const inserted = await db
+    .insertInto("messages")
+    .values({ channel, sender, text, ts: now })
+    .executeTakeFirstOrThrow();
+  return Number(inserted.insertId);
 }
 
 /**
  * Return unread messages for a participant (oldest first, capped) and advance
- * the participant's cursor past them. A participant unknown to the channel
- * starts at 0 and receives the available backlog.
+ * the participant's cursor past them, atomically. A participant unknown to the
+ * channel starts at 0 and receives the available backlog.
  */
 export function recv(
-  db: DatabaseSync,
+  db: Database,
   channel: string,
   participant: string,
   limit = 100,
-): Message[] {
-  const cursor = get<{ last_seen_id: number }>(
-    db,
-    "SELECT last_seen_id FROM cursors WHERE channel = ? AND participant = ?",
-    channel,
-    participant,
-  );
-  const since = cursor?.last_seen_id ?? 0;
+): Promise<Message[]> {
+  return db.transaction().execute(async (trx) => {
+    const cursor = await trx
+      .selectFrom("cursors")
+      .select("last_seen_id")
+      .where("channel", "=", channel)
+      .where("participant", "=", participant)
+      .executeTakeFirst();
+    const since = cursor?.last_seen_id ?? 0;
 
-  const rows = all<Message>(
-    db,
-    `SELECT id, channel, sender, text, ts
-     FROM messages
-     WHERE channel = ? AND id > ?
-     ORDER BY id ASC
-     LIMIT ?`,
-    channel,
-    since,
-    limit,
-  );
+    const rows = await trx
+      .selectFrom("messages")
+      .select(["id", "channel", "sender", "text", "ts"])
+      .where("channel", "=", channel)
+      .where("id", ">", since)
+      .orderBy("id", "asc")
+      .limit(limit)
+      .execute();
 
-  const last = rows.at(-1);
-  if (last) {
-    run(
-      db,
-      `INSERT INTO cursors (channel, participant, last_seen_id)
-       VALUES (?, ?, ?)
-       ON CONFLICT(channel, participant) DO UPDATE SET last_seen_id = excluded.last_seen_id`,
-      channel,
-      participant,
-      last.id,
-    );
-  }
+    const last = rows.at(-1);
+    if (last) {
+      await trx
+        .insertInto("cursors")
+        .values({ channel, participant, last_seen_id: last.id })
+        .onConflict((oc) =>
+          oc.columns(["channel", "participant"]).doUpdateSet({ last_seen_id: last.id }),
+        )
+        .execute();
+    }
 
-  return rows;
+    return rows;
+  });
 }
 
 /** List every channel with this participant's unread count. */
-export function list(db: DatabaseSync, participant: string): ChannelSummary[] {
-  return all<ChannelSummary>(
-    db,
-    `SELECT c.name AS channel,
-            c.last_activity AS lastActivity,
-            (SELECT COUNT(*) FROM messages m
-               WHERE m.channel = c.name
-                 AND m.id > COALESCE(cur.last_seen_id, 0)) AS unread
-     FROM channels c
-     LEFT JOIN cursors cur
-       ON cur.channel = c.name AND cur.participant = ?
-     ORDER BY c.last_activity DESC`,
-    participant,
-  );
+export async function list(db: Database, participant: string): Promise<ChannelSummary[]> {
+  const { rows } = await sql<ChannelSummary>`
+    SELECT c.name AS channel,
+           c.last_activity AS lastActivity,
+           (SELECT COUNT(*) FROM messages m
+              WHERE m.channel = c.name
+                AND m.id > COALESCE(cur.last_seen_id, 0)) AS unread
+    FROM channels c
+    LEFT JOIN cursors cur
+      ON cur.channel = c.name AND cur.participant = ${participant}
+    ORDER BY c.last_activity DESC
+  `.execute(db);
+
+  return rows.map((r) => ({ ...r, unread: Number(r.unread) }));
 }
