@@ -52,11 +52,12 @@ jobs:
           node-version: 24.13.0
       - run: bun install --frozen-lockfile
       - run: bun run build
-      # Lockstep release: one run publishes both packages (mcp + cli) at the
-      # same version via npm Trusted Publishing (OIDC) — no NPM_TOKEN. Needs
-      # `id-token: write` (set above), npm >= 11.5.1 (bundled with Node 24), and
-      # EACH package registered as a Trusted Publisher on npmjs.com for this repo
-      # + workflow (main-ci.yml). Provenance is generated automatically.
+      # Lockstep release: one run sets both package versions then publishes both
+      # (scripts/release-*.mjs via @semantic-release/exec) with
+      # `npm publish --no-workspaces` — npm's workspace reify crashes on bun's
+      # node_modules. Auth is npm OIDC Trusted Publishing (no NPM_TOKEN): needs
+      # `id-token: write` (above), npm >= 11.5.1 (Node 24), and EACH package
+      # registered as a Trusted Publisher on npmjs.com for this repo + workflow.
       - run: npx semantic-release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

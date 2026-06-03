@@ -1,7 +1,10 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "noEmit": true
+    "noEmit": true,
+    "paths": {
+      "chatter-core": ["../core/src/index.ts"]
+    }
   },
   "include": ["src"]
 }

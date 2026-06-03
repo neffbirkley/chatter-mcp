@@ -5,8 +5,13 @@
     "@semantic-release/commit-analyzer",
     "@semantic-release/release-notes-generator",
     "@semantic-release/changelog",
-    ["@semantic-release/npm", { "pkgRoot": "packages/mcp" }],
-    ["@semantic-release/npm", { "pkgRoot": "packages/cli" }],
+    [
+      "@semantic-release/exec",
+      {
+        "prepareCmd": "node scripts/release-set-version.mjs ${nextRelease.version}",
+        "publishCmd": "node scripts/release-publish.mjs"
+      }
+    ],
     [
       "@semantic-release/github",
       { "assets": [], "successComment": false, "failComment": false, "labels": false }
