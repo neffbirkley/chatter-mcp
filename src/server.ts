@@ -32,6 +32,16 @@ export interface ServerDeps {
 export function createServer({ db = openDb(), now = Date.now }: ServerDeps = {}): McpServer {
   const server = new McpServer({ name: "chatter", version: pkg.version });
 
+  // Opportunistic, throttled cleanup runs on activity. Best-effort: a sweep
+  // failure must never fail the user's actual operation.
+  const maybeSweep = async (): Promise<void> => {
+    try {
+      await sweep(db, now());
+    } catch (err) {
+      process.stderr.write(`chatter: sweep failed: ${err instanceof Error ? err.message : err}\n`);
+    }
+  };
+
   server.registerTool(
     "open",
     {
@@ -55,7 +65,7 @@ export function createServer({ db = openDb(), now = Date.now }: ServerDeps = {})
     },
     async (args) => {
       const id = await store.send(db, args.channel, args.as, args.text, now());
-      await sweep(db, now());
+      await maybeSweep();
       return json({ ok: true, id, channel: args.channel });
     },
   );
@@ -70,6 +80,7 @@ export function createServer({ db = openDb(), now = Date.now }: ServerDeps = {})
     },
     async (args) => {
       const messages = await store.recv(db, args.channel, args.as);
+      await maybeSweep();
       return json({ channel: args.channel, count: messages.length, messages });
     },
   );
@@ -83,6 +94,7 @@ export function createServer({ db = openDb(), now = Date.now }: ServerDeps = {})
     },
     async (args) => {
       const channels = await store.list(db, args.as);
+      await maybeSweep();
       return json({ channels });
     },
   );

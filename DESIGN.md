@@ -115,8 +115,9 @@ No background timer (process is short-lived, N copies — a timer is wrong). Swe
 ## DB location
 
 - Fixed: `~/.chatter/db.sqlite`. Single global store across all sessions on the host.
-- Override: env `CHATTER_DB` (absolute path) for per-project isolation.
+- Override: env `CHATTER_DB` for per-project isolation. Relative paths resolve against the server's cwd (the repo's `.mcp.json` uses `.chatter-test.sqlite` this way).
 - **mkdir the parent dir on boot** before opening DB, or first run crashes.
+- Security: `CHATTER_DB` is **operator-controlled and trusted** — it is used verbatim and the parent dir is created if missing. Not a user-facing input; the threat model is local single-user.
 
 ## Distribution
 
