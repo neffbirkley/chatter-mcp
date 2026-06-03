@@ -90,6 +90,17 @@ test("send/recv/peek reject a wrong token", async () => {
   await assert.rejects(() => store.peek(db, "c", "alice", "not-the-token", 4), LeaseError);
 });
 
+test("messages carry an ISO timestamp; listenerCount excludes the sender", async () => {
+  const db = mem();
+  const bob = await claim(db, "x", "bob");
+  const alice = await claim(db, "x", "alice");
+  await store.send(db, "x", "bob", bob, "hi", 1_700_000_000_000);
+
+  assert.equal(await store.listenerCount(db, "x", "bob"), 1); // alice, not bob
+  const batch = await store.recv(db, "x", "alice", alice, 2);
+  assert.equal(batch.messages[0]?.tsIso, new Date(1_700_000_000_000).toISOString());
+});
+
 test("recv reports remaining beyond the batch", async () => {
   const db = mem();
   const alice = await claim(db, "c", "alice");

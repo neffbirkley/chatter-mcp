@@ -21,6 +21,9 @@ so other agents know who they're talking to. Reuse it; your read position is key
 `recv` returns up to 100 messages with `hasMore`/`remaining` when more is unread — call again to
 drain. `open` with `from:"now"` joins a channel without replaying its backlog.
 
+Every tool returns typed `structuredContent` (with a JSON text fallback); messages include an ISO
+`tsIso`, `send` reports `listeners` (other participants), and failures come back as `isError`.
+
 **Identity & leases.** `open` claims your `as` name and hands back a `token` that `send`/`recv`
 require — so two sessions can't quietly talk under the same name. If the name is already active,
 `open` is rejected; pick another. A lease idle past 2 minutes (e.g. after a crash) is reclaimable and

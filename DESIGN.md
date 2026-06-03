@@ -68,6 +68,8 @@ Five tools. All inputs Zod-validated. Tool/param descriptions coach agents to pi
 
 Dropped `close` — channels are cheap; cleanup handles lifecycle. A lease auto-expires via its TTL.
 
+Every tool declares an `outputSchema` and returns `structuredContent` plus a JSON text fallback. Any handler throw (lease failure, DB error) is mapped to an `isError` result rather than crashing the server. Messages carry `tsIso` (ISO 8601); `send` returns `listeners` (other participants in the channel).
+
 ## Schema
 
 ```sql

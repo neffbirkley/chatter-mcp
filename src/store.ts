@@ -28,6 +28,7 @@ export interface Message {
   sender: string;
   text: string;
   ts: number;
+  tsIso: string;
 }
 
 /** A batch of messages plus how many remain unread beyond it. */
@@ -158,9 +159,14 @@ async function countAfter(exec: Database, channel: string, afterId: number): Pro
   return Number(row?.n ?? 0);
 }
 
-/** Read unread messages after a cursor (oldest first, capped). */
-function unreadSince(exec: Database, channel: string, since: number, limit: number) {
-  return exec
+/** Read unread messages after a cursor (oldest first, capped), with ISO timestamps. */
+async function unreadSince(
+  exec: Database,
+  channel: string,
+  since: number,
+  limit: number,
+): Promise<Message[]> {
+  const rows = await exec
     .selectFrom("messages")
     .select(["id", "channel", "sender", "text", "ts"])
     .where("channel", "=", channel)
@@ -168,6 +174,22 @@ function unreadSince(exec: Database, channel: string, since: number, limit: numb
     .orderBy("id", "asc")
     .limit(limit)
     .execute();
+  return rows.map((r) => ({ ...r, tsIso: new Date(r.ts).toISOString() }));
+}
+
+/** Count participants in a channel other than the given sender. */
+export async function listenerCount(
+  db: Database,
+  channel: string,
+  sender: string,
+): Promise<number> {
+  const row = await db
+    .selectFrom("cursors")
+    .select((eb) => eb.fn.countAll().as("n"))
+    .where("channel", "=", channel)
+    .where("participant", "!=", sender)
+    .executeTakeFirst();
+  return Number(row?.n ?? 0);
 }
 
 /**
