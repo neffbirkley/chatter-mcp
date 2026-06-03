@@ -24,9 +24,12 @@
     "@biomejs/biome": "2.4.16",
     "@commitlint/cli": "21.0.2",
     "@commitlint/config-conventional": "21.0.2",
+    "@semantic-release/changelog": "6.0.3",
+    "@semantic-release/git": "10.0.1",
     "@types/node": "24.12.4",
     "lefthook": "2.1.9",
     "prettier": "3.8.3",
+    "semantic-release": "25.0.3",
     "tsdown": "0.22.1",
     "tsx": "4.22.4",
     "typescript": "6.0.3"
