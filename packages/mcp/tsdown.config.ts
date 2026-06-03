@@ -6,6 +6,6 @@ export default defineConfig({
   entry: ["src/index.ts"],
   format: "esm",
   platform: "node",
-  dts: true,
+  dts: false,
   clean: true,
 });

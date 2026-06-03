@@ -1,6 +1,17 @@
 #!/usr/bin/env node
 import { parseArgs } from "node:util";
-import { type From, LeaseError, list, open, openDb, peek, recv, send, sweep } from "chatter-core";
+import {
+  type Database,
+  type From,
+  LeaseError,
+  list,
+  open,
+  openDb,
+  peek,
+  recv,
+  send,
+  sweep,
+} from "chatter-core";
 
 const USAGE = `chatter — talk to other agent sessions over shared channels
 
@@ -29,9 +40,10 @@ async function run(argv: string[]): Promise<number> {
     return 0;
   }
 
-  const db = openDb();
-  const now = Date.now();
+  let db: Database | undefined;
   try {
+    db = openDb();
+    const now = Date.now();
     switch (cmd) {
       case "open": {
         const { values, positionals } = parseArgs({
@@ -93,7 +105,7 @@ async function run(argv: string[]): Promise<number> {
     );
     return 1;
   } finally {
-    await db.destroy();
+    if (db) await db.destroy();
   }
 }
 
