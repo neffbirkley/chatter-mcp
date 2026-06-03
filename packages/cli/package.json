@@ -1,0 +1,49 @@
+{
+  "name": "@neffbirkley/chatter-cli",
+  "version": "0.0.0",
+  "description": "CLI to talk to other agent sessions over shared channels — companion to chatter-mcp.",
+  "type": "module",
+  "license": "MIT",
+  "author": "Geoff Whatley <me@geoffwhatley.com>",
+  "homepage": "https://github.com/neffbirkley/chatter-mcp/tree/main/packages/cli#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/neffbirkley/chatter-mcp.git",
+    "directory": "packages/cli"
+  },
+  "bugs": {
+    "url": "https://github.com/neffbirkley/chatter-mcp/issues"
+  },
+  "keywords": [
+    "cli",
+    "agent",
+    "ipc",
+    "chat",
+    "sqlite",
+    "chatter"
+  ],
+  "engines": {
+    "node": ">=24"
+  },
+  "bin": {
+    "chatter": "dist/index.mjs"
+  },
+  "files": [
+    "dist"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsdown",
+    "prepack": "tsdown",
+    "typecheck": "tsc --noEmit",
+    "test": "true"
+  },
+  "dependencies": {
+    "kysely": "0.29.2"
+  },
+  "devDependencies": {
+    "chatter-core": "workspace:*"
+  }
+}
