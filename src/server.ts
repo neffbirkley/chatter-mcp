@@ -11,7 +11,7 @@ const channel = z
   .string()
   .min(1)
   .max(200)
-  .describe("Channel (mailbox) name. Shared across all sessions on this machine.");
+  .describe("Channel name. Shared across all sessions on this machine.");
 const as = z
   .string()
   .min(1)
@@ -28,14 +28,14 @@ export interface ServerDeps {
   now?: () => number;
 }
 
-/** Build the MCP server with the four mailbox tools registered. */
+/** Build the MCP server with the four chatter tools registered. */
 export function createServer({ db = openDb(), now = Date.now }: ServerDeps = {}): McpServer {
-  const server = new McpServer({ name: "agent-mailbox", version: pkg.version });
+  const server = new McpServer({ name: "chatter", version: pkg.version });
 
   server.registerTool(
     "open",
     {
-      title: "Open mailbox channel",
+      title: "Open channel",
       description:
         "Ensure a channel exists and register yourself as a participant. Call before reading a new channel so your cursor is tracked.",
       inputSchema: { channel, as },

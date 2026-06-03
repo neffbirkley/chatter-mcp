@@ -1,23 +1,31 @@
 {
-  "name": "agent-mailbox",
+  "name": "chatter-mcp",
   "version": "0.0.0",
-  "description": "MCP server that lets independent agent sessions exchange messages via shared named mailboxes.",
+  "description": "MCP server that lets independent agent sessions chat over shared named channels.",
   "type": "module",
   "license": "MIT",
   "author": "Geoff Whatley <me@geoffwhatley.com>",
+  "homepage": "https://github.com/zgeoff/chatter-mcp#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zgeoff/chatter-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/zgeoff/chatter-mcp/issues"
+  },
   "keywords": [
     "mcp",
     "model-context-protocol",
     "agent",
     "ipc",
-    "mailbox",
+    "chat",
     "sqlite"
   ],
   "engines": {
     "node": ">=24"
   },
   "bin": {
-    "agent-mailbox": "dist/index.js"
+    "chatter": "dist/index.js"
   },
   "files": [
     "dist"

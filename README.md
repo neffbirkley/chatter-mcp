@@ -1,79 +1,46 @@
-# agent-mailbox
+# chatter
 
-An [MCP](https://modelcontextprotocol.io) server that lets independent, human-in-the-loop agent
-sessions (Claude Code and other harnesses) exchange messages on demand through shared **named
-mailboxes** on the same machine.
+An MCP server that lets independent agent sessions **chat over shared channels** on one machine.
 
-No sockets, no daemon. Every session launches its own copy of the server over stdio; they
-rendezvous through a shared SQLite file. Drop a message into a channel from one session, pick it up
-from another.
-
-## How it works
-
-- **Mailbox model.** A channel is an append-only message log. Each participant keeps a read cursor,
-  so multiple readers and restarts are handled for free.
-- **Polling, not push.** MCP cannot wake an idle agent, so `recv` returns whatever is unread. Let
-  your harness decide when to check.
-- **The DB file is the broker.** Stdio MCP servers are spawned per session, sharing no memory. State
-  lives in `~/.agent-mailbox/db.sqlite` (override with `AGENT_MAILBOX_DB`).
+One session drops a message into a named channel; another picks it up. No daemon, no sockets — each
+session spawns its own stdio server and they rendezvous through a shared SQLite file.
 
 ## Tools
 
-| Tool   | Input                   | Behavior                                            |
-| ------ | ----------------------- | --------------------------------------------------- |
-| `open` | `channel`, `as`         | Ensure a channel exists and register a participant. |
-| `send` | `channel`, `as`, `text` | Append a message to a channel.                      |
-| `recv` | `channel`, `as`         | Return unread messages and advance your cursor.     |
-| `list` | `as`                    | List channels with your unread counts.              |
+| Tool   | Args                    | Does                                        |
+| ------ | ----------------------- | ------------------------------------------- |
+| `open` | `channel`, `as`         | Join a channel under a name.                |
+| `send` | `channel`, `as`, `text` | Post a message.                             |
+| `recv` | `channel`, `as`         | Read unread messages; advances your cursor. |
+| `list` | `as`                    | Channels with your unread counts.           |
 
-`as` is the name you pick for yourself (e.g. `"alice"`). Your read cursor is keyed by it, so reuse
-the same name across restarts.
+`as` is the name you pick (e.g. `"alice"`). Your read position is keyed to it — reuse it.
 
-## Install / run
+## Use
 
-Requires **Node.js >= 24** (uses the built-in `node:sqlite`).
-
-Register it with your harness as an MCP server, for example:
+Requires **Node ≥ 24**. Register with your harness:
 
 ```json
 {
   "mcpServers": {
-    "mailbox": {
-      "command": "npx",
-      "args": ["-y", "agent-mailbox"]
-    }
+    "chatter": { "command": "npx", "args": ["-y", "chatter-mcp"] }
   }
 }
 ```
 
-## Housekeeping
+State lives in `~/.chatter/db.sqlite` (override with `CHATTER_DB`). Channels idle for 7 days are
+pruned automatically.
 
-Channels inactive for **7 days** are pruned opportunistically. No configuration, no background
-process.
-
-## Development
+## Develop
 
 ```bash
 bun install
-bun run typecheck
 bun run test     # runs under Node for node:sqlite fidelity
 bun run build
-bun run inspect  # manual testing via the MCP inspector
 ```
 
-### Testing against a local build
-
-`.mcp.json` registers the server (`mailbox`) from the local `dist/` build, writing to a gitignored
-`.mcp-test.sqlite` so testing never touches a real mailbox. `dist/` is gitignored, so build first:
-
-```bash
-bun run build   # refresh dist/ after any source change
-```
-
-Then reload the MCP server in your harness (it requires one-time approval). Rebuild after edits —
-the config runs the compiled output, not the TypeScript source.
-
-See [DESIGN.md](./DESIGN.md) for the full design rationale.
+`.mcp.json` runs the local `dist/` build against a gitignored `.chatter-test.sqlite`. Rebuild after
+changes — it runs compiled output, not source.
 
 ## License
 

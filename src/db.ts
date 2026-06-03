@@ -8,15 +8,15 @@ import { applySchema, type DB } from "./schema.js";
 
 export type Database = Kysely<DB>;
 
-/** Resolve the mailbox DB path: env override, else `~/.agent-mailbox/db.sqlite`. */
+/** Resolve the chatter DB path: env override, else `~/.chatter/db.sqlite`. */
 export function resolveDbPath(): string {
-  const override = process.env.AGENT_MAILBOX_DB?.trim();
+  const override = process.env.CHATTER_DB?.trim();
   if (override) return override;
-  return join(homedir(), ".agent-mailbox", "db.sqlite");
+  return join(homedir(), ".chatter", "db.sqlite");
 }
 
 /**
- * Open (creating if needed) the shared mailbox database and wrap it in Kysely.
+ * Open (creating if needed) the shared chatter database and wrap it in Kysely.
  *
  * The file is the cross-process broker: every agent session spawns its own
  * server process, so all coordination happens through this one file. WAL +

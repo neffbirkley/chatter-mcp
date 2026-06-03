@@ -1,10 +1,10 @@
 {
   "mcpServers": {
-    "mailbox": {
+    "chatter": {
       "command": "node",
       "args": ["dist/index.js"],
       "env": {
-        "AGENT_MAILBOX_DB": ".mcp-test.sqlite"
+        "CHATTER_DB": ".chatter-test.sqlite"
       }
     }
   }

@@ -1,6 +1,6 @@
-# agent-mailbox — Design
+# chatter — Design
 
-An MCP server that lets independent human-in-the-loop agent sessions (Claude Code, etc.) exchange messages on demand via shared named mailboxes.
+An MCP server that lets independent human-in-the-loop agent sessions (Claude Code, etc.) chat on demand via shared named channels.
 
 ## Problem
 
@@ -10,7 +10,7 @@ Multiple agent sessions run on one machine. There's no built-in way for them to 
 
 An agent only acts on its turn. An MCP server is passive: it answers tool calls, it cannot push a new turn into an idle session. MCP server→client notifications exist but harnesses don't spawn a fresh agent turn from them. So **receiving cannot be event-driven** — it reduces to polling. Modern harnesses can choose to wait/poll themselves, so we do not bake blocking into the server.
 
-## Model: shared mailbox (not sockets)
+## Model: shared mailbox-style channels (not sockets)
 
 State lives in the server's storage, not in any connection. Sessions drop messages into named channels; sessions drain them out. Append-only log per channel; each participant keeps a read cursor. Benefits:
 
@@ -114,13 +114,13 @@ No background timer (process is short-lived, N copies — a timer is wrong). Swe
 
 ## DB location
 
-- Fixed: `~/.agent-mailbox/db.sqlite`. Single global mailbox across all sessions on the host.
-- Override: env `AGENT_MAILBOX_DB` (absolute path) for per-project isolation.
+- Fixed: `~/.chatter/db.sqlite`. Single global store across all sessions on the host.
+- Override: env `CHATTER_DB` (absolute path) for per-project isolation.
 - **mkdir the parent dir on boot** before opening DB, or first run crashes.
 
 ## Distribution
 
-- `bin` entry + `#!/usr/bin/env node` shebang + executable bit → launches as `npx agent-mailbox`.
+- `bin` entry + `#!/usr/bin/env node` shebang + executable bit → launches as `npx chatter-mcp`.
 - Ship ESM JS + `.d.ts`. Build via Bun (or tsdown) + `tsc` for types.
 - `files: ["dist"]` — publish only build output, not source.
 - `publishConfig.access: public` (if scoped).
@@ -138,7 +138,7 @@ Stdio MCP uses **stdout for protocol framing**. ANY stray stdout corrupts the st
 ## Project layout
 
 ```
-agent-mailbox/
+chatter/
 ├── src/
 │   ├── index.ts        # entry: shebang, server bootstrap, stdio transport
 │   ├── server.ts       # MCP server + four tool registrations

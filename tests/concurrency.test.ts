@@ -11,7 +11,7 @@ import { list } from "../src/store.ts";
 const WRITERS = 4;
 const PER_WRITER = 50;
 
-const dir = mkdtempSync(join(tmpdir(), "agent-mailbox-"));
+const dir = mkdtempSync(join(tmpdir(), "chatter-"));
 const dbPath = join(dir, "race.sqlite");
 const writer = fileURLToPath(new URL("./_writer.ts", import.meta.url));
 
