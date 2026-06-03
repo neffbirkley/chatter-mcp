@@ -2,7 +2,7 @@
   "mcpServers": {
     "chatter": {
       "command": "node",
-      "args": ["dist/index.js"],
+      "args": ["packages/mcp/dist/index.mjs"],
       "env": {
         "CHATTER_DB": ".chatter-test.sqlite"
       }

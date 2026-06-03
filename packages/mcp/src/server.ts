@@ -1,9 +1,8 @@
 import { createRequire } from "node:module";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import * as store from "chatter-core";
+import { type Database, openDb, sweep } from "chatter-core";
 import { z } from "zod";
-import { sweep } from "./cleanup.js";
-import { type Database, openDb } from "./db.js";
-import * as store from "./store.js";
 
 const pkg = createRequire(import.meta.url)("../package.json") as { version: string };
 

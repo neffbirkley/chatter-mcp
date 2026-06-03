@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { sweep } from "./cleanup.js";
-import { openDb } from "./db.js";
+import { openDb, sweep } from "chatter-core";
 import { createServer } from "./server.js";
 
 async function main(): Promise<void> {

@@ -1,0 +1,58 @@
+{
+  "name": "@neffbirkley/chatter-mcp",
+  "version": "1.1.0",
+  "description": "MCP server that lets independent agent sessions chat over shared named channels.",
+  "type": "module",
+  "license": "MIT",
+  "author": "Geoff Whatley <me@geoffwhatley.com>",
+  "homepage": "https://github.com/neffbirkley/chatter-mcp#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/neffbirkley/chatter-mcp.git",
+    "directory": "packages/mcp"
+  },
+  "bugs": {
+    "url": "https://github.com/neffbirkley/chatter-mcp/issues"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "agent",
+    "ipc",
+    "chat",
+    "sqlite"
+  ],
+  "engines": {
+    "node": ">=24"
+  },
+  "bin": {
+    "chatter-mcp": "dist/index.mjs"
+  },
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "import": "./dist/index.mjs"
+    }
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsdown",
+    "prepack": "tsdown",
+    "typecheck": "tsc --noEmit",
+    "test": "true",
+    "inspect": "npx @modelcontextprotocol/inspector node dist/index.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.29.0",
+    "kysely": "0.29.2",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "chatter-core": "workspace:*"
+  }
+}

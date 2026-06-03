@@ -1,70 +1,33 @@
 {
-  "name": "@neffbirkley/chatter-mcp",
-  "version": "1.0.0",
-  "description": "MCP server that lets independent agent sessions chat over shared named channels.",
+  "name": "chatter-monorepo",
+  "version": "0.0.0",
+  "private": true,
   "type": "module",
   "license": "MIT",
   "author": "Geoff Whatley <me@geoffwhatley.com>",
-  "homepage": "https://github.com/neffbirkley/chatter-mcp#readme",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/neffbirkley/chatter-mcp.git"
-  },
-  "bugs": {
-    "url": "https://github.com/neffbirkley/chatter-mcp/issues"
-  },
-  "keywords": [
-    "mcp",
-    "model-context-protocol",
-    "agent",
-    "ipc",
-    "chat",
-    "sqlite"
-  ],
   "engines": {
     "node": ">=24"
   },
-  "bin": {
-    "chatter": "dist/index.js"
-  },
-  "files": [
-    "dist"
+  "workspaces": [
+    "packages/*"
   ],
-  "exports": {
-    ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
-    }
-  },
-  "publishConfig": {
-    "access": "public"
-  },
   "scripts": {
-    "build": "tsc",
-    "prepack": "tsc",
-    "typecheck": "tsc --noEmit",
-    "test": "node --test --import tsx tests/*.test.ts",
+    "build": "bun run --filter '*' build",
+    "typecheck": "bun run --filter '*' typecheck",
+    "test": "bun run --filter '*' test",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "format:md": "prettier --write \"**/*.md\"",
-    "inspect": "npx @modelcontextprotocol/inspector node dist/index.js",
     "prepare": "lefthook install || true"
-  },
-  "dependencies": {
-    "@modelcontextprotocol/sdk": "1.29.0",
-    "kysely": "0.29.2",
-    "zod": "4.4.3"
   },
   "devDependencies": {
     "@biomejs/biome": "2.4.16",
     "@commitlint/cli": "21.0.2",
     "@commitlint/config-conventional": "21.0.2",
-    "@semantic-release/changelog": "6.0.3",
-    "@semantic-release/git": "10.0.1",
     "@types/node": "24.12.4",
     "lefthook": "2.1.9",
     "prettier": "3.8.3",
-    "semantic-release": "25.0.3",
+    "tsdown": "0.22.1",
     "tsx": "4.22.4",
     "typescript": "6.0.3"
   }
