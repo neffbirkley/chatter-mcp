@@ -45,22 +45,27 @@ All deps installed at **fixed exact versions** (no `^`/`~`). Node pinned to `24.
 - **Runtime:** `@modelcontextprotocol/sdk`, `kysely`, `zod`. (`node:sqlite` = built-in, no package; the dialect is vendored, not a dependency.)
 - **Dev:** `biome`, `prettier`, `lefthook`, `@commitlint/cli`, `@commitlint/config-conventional`, `semantic-release` (+ commit-analyzer, release-notes-generator, npm, github, changelog plugins), `typescript`, `@modelcontextprotocol/inspector`, `@types/node`.
 
-## Identity
+## Identity & leases
 
-A participant **declares a name** on join (`as: "alice"`). Cursor keyed by `(channel, participant)` survives restarts. Two sessions choosing the same name share a cursor (documented limitation; namespacing is v2).
+A participant **declares a name** on join (`as: "alice"`) and `open` returns a **lease token** that `send`/`recv` require. The lease (`token` + `last_active`) lives on the cursor row, keyed by `(channel, participant)`.
+
+- `open` grants a fresh token unless the name holds a **fresh** lease (active within `LEASE_TTL_MS` = 2 min) → rejected with `retryAfterMs`.
+- `send`/`recv` validate the token in one atomic `UPDATE … WHERE token = ?` that also refreshes `last_active`. A wrong/revoked token raises `LeaseError` → an `isError` tool result.
+- A **stale** lease (idle past the TTL, e.g. after a crash) is reclaimable; reclaim keeps the existing read position. `open` is serialized in a `BEGIN IMMEDIATE` transaction so two concurrent claims for one name can't both win.
+- Limitation: chatter cannot distinguish _reconnect_ from _collision_, so reconnect-after-crash must wait out the TTL before reclaiming. Tunable via `LEASE_TTL_MS`.
 
 ## Tools (MCP surface)
 
-Four tools. All inputs Zod-validated.
+Four tools. All inputs Zod-validated. Tool/param descriptions coach agents to pick stable, descriptive names; the server advertises usage `instructions`.
 
-| Tool   | Input                   | Behavior                                                                                        |
-| ------ | ----------------------- | ----------------------------------------------------------------------------------------------- |
-| `open` | `channel`, `as`         | Ensure channel exists; register participant (cursor row at 0 if new). Bumps `last_activity`.    |
-| `send` | `channel`, `as`, `text` | Append message. Bumps `last_activity`. Triggers throttled cleanup sweep.                        |
-| `recv` | `channel`, `as`         | Return messages with `id > cursor` (ORDER BY id, LIMIT 100); advance cursor to max id returned. |
-| `list` | `as`                    | All channels + this participant's unread count each.                                            |
+| Tool   | Input                            | Behavior                                                                                                |
+| ------ | -------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `open` | `channel`, `as`                  | Claim the name; return a lease `token` (or reject if active). Ensures channel + cursor. Bumps activity. |
+| `send` | `channel`, `as`, `token`, `text` | Validate lease, append message. Bumps activity. Throttled best-effort sweep.                            |
+| `recv` | `channel`, `as`, `token`         | Validate lease; return messages with `id > cursor` (LIMIT 100); advance cursor. Atomic transaction.     |
+| `list` | `as?`                            | Discovery: every channel with members, message count, `lastActivity` (+ISO); unread when `as` given.    |
 
-Dropped `close` — channels are cheap; cleanup handles lifecycle.
+Dropped `close` — channels are cheap; cleanup handles lifecycle. A lease auto-expires via its TTL.
 
 ## Schema
 
@@ -81,6 +86,8 @@ CREATE TABLE IF NOT EXISTS cursors (
   channel      TEXT NOT NULL,
   participant  TEXT NOT NULL,
   last_seen_id INTEGER NOT NULL DEFAULT 0,
+  token        TEXT,     -- current lease token; null if unleased
+  last_active  INTEGER,  -- last activity under the lease, for reclaim
   PRIMARY KEY (channel, participant)
 );
 CREATE INDEX IF NOT EXISTS idx_msg_channel_id ON messages(channel, id);
@@ -88,9 +95,9 @@ CREATE INDEX IF NOT EXISTS idx_msg_channel_id ON messages(channel, id);
 
 `recv` query: `SELECT * FROM messages WHERE channel=? AND id > ? ORDER BY id LIMIT 100`, then set cursor to max id. Idempotent, replayable, monotonic.
 
-`list` unread: `COUNT(*) WHERE channel=? AND id > cursor`.
+`list` unread: `COUNT(*) WHERE channel=? AND id > cursor`. Members derived from distinct message senders ∪ cursor participants.
 
-Schema versioning v1: `CREATE TABLE IF NOT EXISTS` + `PRAGMA user_version`. Add real migrations when schema evolves. Tables are `STRICT` for type rigor.
+Schema versioning: `PRAGMA user_version` (now **2**). `applySchema` runs `CREATE TABLE IF NOT EXISTS` then adds missing columns idempotently (`PRAGMA table_info` guard) — the v1→v2 lease columns migrate in place. Tables are `STRICT` for type rigor.
 
 ## Concurrency — required PRAGMAs
 
@@ -151,7 +158,8 @@ chatter/
 ├── tests/
 │   ├── tools.test.ts
 │   ├── concurrency.test.ts
-│   └── _writer.ts      # child process for the concurrency test
+│   ├── _writer.ts      # child: concurrent writers
+│   └── _race_worker.ts # child: concurrent recv+send contention
 ├── .github/workflows/ci.yml
 ├── biome.json
 ├── lefthook.yml
@@ -169,9 +177,9 @@ chatter/
 ## Out of scope (v1)
 
 - Blocking/long-poll receive (harness waits itself).
-- Participant namespacing / auth.
 - Cross-machine transport (HTTP). Stdio + same host only.
-- Configurable TTL.
+- Configurable TTLs (lease + inactivity are constants).
+- Read-path extras still open: `recv` `hasMore`/`remaining` signal, non-advancing `peek`, join-from-now.
 - Message edit/delete, threads, attachments.
 
 ## Decisions during build

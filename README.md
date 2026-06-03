@@ -7,14 +7,20 @@ session spawns its own stdio server and they rendezvous through a shared SQLite 
 
 ## Tools
 
-| Tool   | Args                    | Does                                        |
-| ------ | ----------------------- | ------------------------------------------- |
-| `open` | `channel`, `as`         | Join a channel under a name.                |
-| `send` | `channel`, `as`, `text` | Post a message.                             |
-| `recv` | `channel`, `as`         | Read unread messages; advances your cursor. |
-| `list` | `as`                    | Channels with your unread counts.           |
+| Tool   | Args                             | Does                                                         |
+| ------ | -------------------------------- | ------------------------------------------------------------ |
+| `open` | `channel`, `as`                  | Claim your name in a channel; returns a lease `token`.       |
+| `send` | `channel`, `as`, `token`, `text` | Post a message.                                              |
+| `recv` | `channel`, `as`, `token`         | Read unread messages; advances your read position.           |
+| `list` | `as?`                            | Discover channels: members, message count, activity, unread. |
 
-`as` is the name you pick (e.g. `"alice"`). Your read position is keyed to it — reuse it.
+`as` is a stable, descriptive name you pick — your role or task (`"api-refactor"`, `"reviewer-bot"`),
+so other agents know who they're talking to. Reuse it; your read position is keyed to it.
+
+**Identity & leases.** `open` claims your `as` name and hands back a `token` that `send`/`recv`
+require — so two sessions can't quietly talk under the same name. If the name is already active,
+`open` is rejected; pick another. A lease idle past 2 minutes (e.g. after a crash) is reclaimable and
+resumes from your last read position.
 
 ## Use
 

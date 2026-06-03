@@ -3,7 +3,7 @@
 // writes it (read-modify-write) — the pattern that throws SQLITE_BUSY_SNAPSHOT
 // across processes under a deferred BEGIN. Exits non-zero if any call throws.
 import { openDb } from "../src/db.ts";
-import { recv, send } from "../src/store.ts";
+import { open, recv, send } from "../src/store.ts";
 
 const [, , dbPath, id, itersStr] = process.argv;
 if (!dbPath || !id || !itersStr) {
@@ -14,9 +14,11 @@ if (!dbPath || !id || !itersStr) {
 const db = openDb(dbPath);
 const iters = Number(itersStr);
 try {
+  const lease = await open(db, "race", id, Date.now());
+  if (!lease.granted) throw new Error("lease denied");
   for (let i = 0; i < iters; i++) {
-    await send(db, "race", id, `${id}:${i}`, Date.now());
-    await recv(db, "race", id);
+    await send(db, "race", id, lease.token, `${id}:${i}`, Date.now());
+    await recv(db, "race", id, lease.token, Date.now());
   }
   await db.destroy();
   process.exit(0);

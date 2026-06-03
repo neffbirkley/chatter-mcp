@@ -1,5 +1,23 @@
+import { randomUUID } from "node:crypto";
 import { sql } from "kysely";
 import type { Database } from "./db.js";
+
+/** A name's lease is reclaimable once idle longer than this. */
+export const LEASE_TTL_MS = 2 * 60 * 1000;
+
+/** Thrown when a send/recv presents a token that does not hold the name's lease. */
+export class LeaseError extends Error {
+  constructor(channel: string, participant: string) {
+    super(
+      `No valid lease for '${participant}' in '${channel}'. Call open to claim this name and get a fresh token.`,
+    );
+    this.name = "LeaseError";
+  }
+}
+
+export type OpenResult =
+  | { granted: true; token: string }
+  | { granted: false; retryAfterMs: number };
 
 export interface Message {
   id: number;
@@ -11,8 +29,14 @@ export interface Message {
 
 export interface ChannelSummary {
   channel: string;
-  unread: number;
+  /** Everyone who has participated: union of message senders and readers. */
+  members: string[];
+  /** Total messages in the channel. */
+  messages: number;
   lastActivity: number;
+  lastActivityIso: string;
+  /** This participant's unread count — present only when `as` was supplied. */
+  unread?: number;
 }
 
 /** Ensure a channel row exists and bump its activity timestamp. */
@@ -24,29 +48,75 @@ async function touchChannel(db: Database, channel: string, now: number): Promise
     .execute();
 }
 
-/** Ensure a channel exists and register a participant's cursor (at 0 if new). */
-export async function open(
+/**
+ * Validate and refresh a name's lease in one atomic UPDATE. Throws LeaseError
+ * if the token does not match the current lease for (channel, participant).
+ */
+async function refreshLease(
+  exec: Database,
+  channel: string,
+  participant: string,
+  token: string,
+  now: number,
+): Promise<void> {
+  const res = await exec
+    .updateTable("cursors")
+    .set({ last_active: now })
+    .where("channel", "=", channel)
+    .where("participant", "=", participant)
+    .where("token", "=", token)
+    .executeTakeFirst();
+  if (Number(res.numUpdatedRows) === 0) throw new LeaseError(channel, participant);
+}
+
+/**
+ * Claim a name in a channel and return a lease token. Rejects if the name holds
+ * a lease that is still fresh (active within {@link LEASE_TTL_MS}); a stale
+ * lease (idle past the TTL, e.g. after a crash) is reclaimable and keeps the
+ * existing read position. Serialized in a transaction so two concurrent opens
+ * for the same name cannot both be granted.
+ */
+export function open(
   db: Database,
   channel: string,
   participant: string,
   now: number,
-): Promise<void> {
-  await touchChannel(db, channel, now);
-  await db
-    .insertInto("cursors")
-    .values({ channel, participant, last_seen_id: 0 })
-    .onConflict((oc) => oc.columns(["channel", "participant"]).doNothing())
-    .execute();
+): Promise<OpenResult> {
+  return db.transaction().execute(async (trx): Promise<OpenResult> => {
+    await touchChannel(trx, channel, now);
+    const row = await trx
+      .selectFrom("cursors")
+      .select(["token", "last_active"])
+      .where("channel", "=", channel)
+      .where("participant", "=", participant)
+      .executeTakeFirst();
+
+    if (row?.token != null && row.last_active != null && now - row.last_active < LEASE_TTL_MS) {
+      return { granted: false, retryAfterMs: LEASE_TTL_MS - (now - row.last_active) };
+    }
+
+    const token = randomUUID();
+    await trx
+      .insertInto("cursors")
+      .values({ channel, participant, last_seen_id: 0, token, last_active: now })
+      .onConflict((oc) =>
+        oc.columns(["channel", "participant"]).doUpdateSet({ token, last_active: now }),
+      )
+      .execute();
+    return { granted: true, token };
+  });
 }
 
-/** Append a message to a channel (auto-creating it) and return its id. */
+/** Append a message to a channel and return its id. Requires a valid lease token. */
 export async function send(
   db: Database,
   channel: string,
   sender: string,
+  token: string,
   text: string,
   now: number,
 ): Promise<number> {
+  await refreshLease(db, channel, sender, token, now);
   await touchChannel(db, channel, now);
   const inserted = await db
     .insertInto("messages")
@@ -57,16 +127,19 @@ export async function send(
 
 /**
  * Return unread messages for a participant (oldest first, capped) and advance
- * the participant's cursor past them, atomically. A participant unknown to the
- * channel starts at 0 and receives the available backlog.
+ * the participant's cursor past them, atomically. Requires a valid lease token.
  */
 export function recv(
   db: Database,
   channel: string,
   participant: string,
+  token: string,
+  now: number,
   limit = 100,
 ): Promise<Message[]> {
   return db.transaction().execute(async (trx) => {
+    await refreshLease(trx, channel, participant, token, now);
+
     const cursor = await trx
       .selectFrom("cursors")
       .select("last_seen_id")
@@ -99,19 +172,58 @@ export function recv(
   });
 }
 
-/** List every channel with this participant's unread count. */
-export async function list(db: Database, participant: string): Promise<ChannelSummary[]> {
-  const { rows } = await sql<ChannelSummary>`
+/**
+ * Discovery: every channel with its members, message count, and last activity,
+ * most recently active first. Supply `participant` to also get their unread
+ * count per channel; omit it for anonymous discovery.
+ */
+export async function list(db: Database, participant?: string): Promise<ChannelSummary[]> {
+  const unread =
+    participant === undefined
+      ? sql<number | null>`NULL`
+      : sql<number>`(SELECT COUNT(*) FROM messages m
+                       WHERE m.channel = c.name
+                         AND m.id > COALESCE(
+                           (SELECT last_seen_id FROM cursors
+                              WHERE channel = c.name AND participant = ${participant}), 0))`;
+
+  const channels = await sql<{
+    channel: string;
+    lastActivity: number;
+    messages: number;
+    unread: number | null;
+  }>`
     SELECT c.name AS channel,
            c.last_activity AS lastActivity,
-           (SELECT COUNT(*) FROM messages m
-              WHERE m.channel = c.name
-                AND m.id > COALESCE(cur.last_seen_id, 0)) AS unread
+           (SELECT COUNT(*) FROM messages m WHERE m.channel = c.name) AS messages,
+           ${unread} AS unread
     FROM channels c
-    LEFT JOIN cursors cur
-      ON cur.channel = c.name AND cur.participant = ${participant}
     ORDER BY c.last_activity DESC
   `.execute(db);
 
-  return rows.map((r) => ({ ...r, unread: Number(r.unread) }));
+  // Member roster derived from senders + readers. Fetched separately (not via
+  // group_concat) because participant names are free text and may contain commas.
+  const memberRows = await sql<{ channel: string; name: string }>`
+    SELECT channel, name FROM (
+      SELECT channel, sender AS name FROM messages
+      UNION
+      SELECT channel, participant AS name FROM cursors
+    ) ORDER BY name
+  `.execute(db);
+
+  const members = new Map<string, string[]>();
+  for (const { channel, name } of memberRows.rows) {
+    const roster = members.get(channel);
+    if (roster) roster.push(name);
+    else members.set(channel, [name]);
+  }
+
+  return channels.rows.map((r) => ({
+    channel: r.channel,
+    members: members.get(r.channel) ?? [],
+    messages: Number(r.messages),
+    lastActivity: r.lastActivity,
+    lastActivityIso: new Date(r.lastActivity).toISOString(),
+    ...(participant === undefined ? {} : { unread: Number(r.unread ?? 0) }),
+  }));
 }
