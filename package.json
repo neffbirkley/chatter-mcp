@@ -5,13 +5,13 @@
   "type": "module",
   "license": "MIT",
   "author": "Geoff Whatley <me@geoffwhatley.com>",
-  "homepage": "https://github.com/zgeoff/chatter-mcp#readme",
+  "homepage": "https://github.com/neffbirkley/chatter-mcp#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/zgeoff/chatter-mcp.git"
+    "url": "git+https://github.com/neffbirkley/chatter-mcp.git"
   },
   "bugs": {
-    "url": "https://github.com/zgeoff/chatter-mcp/issues"
+    "url": "https://github.com/neffbirkley/chatter-mcp/issues"
   },
   "keywords": [
     "mcp",
