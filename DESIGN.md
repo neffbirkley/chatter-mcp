@@ -90,7 +90,7 @@ CREATE INDEX IF NOT EXISTS idx_msg_channel_id ON messages(channel, id);
 
 `list` unread: `COUNT(*) WHERE channel=? AND id > cursor`.
 
-Schema versioning v1: `CREATE TABLE IF NOT EXISTS` + `PRAGMA user_version`. Move to Kysely migrator when schema evolves.
+Schema versioning v1: `CREATE TABLE IF NOT EXISTS` + `PRAGMA user_version`. Add real migrations when schema evolves. Tables are `STRICT` for type rigor.
 
 ## Concurrency — required PRAGMAs
 
@@ -141,18 +141,16 @@ Stdio MCP uses **stdout for protocol framing**. ANY stray stdout corrupts the st
 agent-mailbox/
 ├── src/
 │   ├── index.ts        # entry: shebang, server bootstrap, stdio transport
-│   ├── server.ts       # MCP server + tool registration
-│   ├── db.ts           # node:sqlite open, PRAGMAs, mkdir, Kysely instance
+│   ├── server.ts       # MCP server + four tool registrations
+│   ├── db.ts           # node:sqlite open, PRAGMAs, mkdir, schema apply
 │   ├── schema.ts       # DDL + user_version bootstrap
-│   ├── tools/
-│   │   ├── open.ts
-│   │   ├── send.ts
-│   │   ├── recv.ts
-│   │   └── list.ts
+│   ├── sqlite.ts       # typed all/get/run helpers — the only cast boundary
+│   ├── store.ts        # open/send/recv/list query logic
 │   └── cleanup.ts      # opportunistic sweep
 ├── tests/
 │   ├── tools.test.ts
-│   └── concurrency.test.ts
+│   ├── concurrency.test.ts
+│   └── _writer.ts      # child process for the concurrency test
 ├── .github/workflows/ci.yml
 ├── biome.json
 ├── lefthook.yml
