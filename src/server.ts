@@ -27,6 +27,12 @@ const token = z
   .min(1)
   .max(100)
   .describe("Your lease token from `open`. Proves you hold this name; required to send and recv.");
+const from = z
+  .enum(["start", "now"])
+  .default("start")
+  .describe(
+    "Where a new join starts reading: 'start' replays channel history, 'now' skips the backlog. Ignored when reclaiming a name you already hold.",
+  );
 
 const INSTRUCTIONS =
   "chatter lets independent agent sessions talk over shared, named channels on this machine. " +
@@ -34,7 +40,7 @@ const INSTRUCTIONS =
   "Name channels by topic/purpose ('auth-migration', 'release-2.0') so others can find them. " +
   "Call `open` to claim your `as` name in a channel and receive a lease token, then `send`/`recv` with that token. " +
   "If `open` is rejected, the name is active under another session — pick a different name. " +
-  "Use `list` to discover channels and who's in them. recv polls — chatter does not push.";
+  "Use `list` to discover channels and who's in them. recv polls (chatter does not push) and returns `hasMore` when more unread remains than one batch; `peek` previews without consuming.";
 
 function json(value: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }] };
@@ -53,7 +59,7 @@ export interface ServerDeps {
   now?: () => number;
 }
 
-/** Build the MCP server with the four chatter tools registered. */
+/** Build the MCP server with the chatter tools registered. */
 export function createServer({ db = openDb(), now = Date.now }: ServerDeps = {}): McpServer {
   const server = new McpServer(
     { name: "chatter", version: pkg.version },
@@ -75,11 +81,11 @@ export function createServer({ db = openDb(), now = Date.now }: ServerDeps = {})
     {
       title: "Open channel",
       description:
-        "Claim your name in a channel and receive a lease token, required before send/recv. The channel is created if needed. Rejected if the name is currently active under another session — pick a different name and retry.",
-      inputSchema: { channel, as },
+        "Claim your name in a channel and receive a lease token, required before send/recv. The channel is created if needed. Rejected if the name is currently active under another session — pick a different name and retry. Use from:'now' to skip the backlog on a fresh join.",
+      inputSchema: { channel, as, from },
     },
     async (args) => {
-      const result = await store.open(db, args.channel, args.as, now());
+      const result = await store.open(db, args.channel, args.as, now(), args.from);
       if (!result.granted) {
         return fail({
           ok: false,
@@ -117,14 +123,58 @@ export function createServer({ db = openDb(), now = Date.now }: ServerDeps = {})
     {
       title: "Receive messages",
       description:
-        "Return messages you have not seen yet on a channel (oldest first, up to 100) and advance your read position. Requires the lease token from open. Polling — chatter does not push.",
+        "Return messages you have not seen yet on a channel (oldest first, up to 100) and advance your read position. Requires the lease token from open. Polling — chatter does not push. `hasMore`/`remaining` indicate unread messages beyond this batch — call again to drain them.",
       inputSchema: { channel, as, token },
     },
     async (args) => {
       try {
-        const messages = await store.recv(db, args.channel, args.as, args.token, now());
+        const { messages, remaining } = await store.recv(
+          db,
+          args.channel,
+          args.as,
+          args.token,
+          now(),
+        );
         await maybeSweep();
-        return json({ channel: args.channel, count: messages.length, messages });
+        return json({
+          channel: args.channel,
+          count: messages.length,
+          messages,
+          remaining,
+          hasMore: remaining > 0,
+        });
+      } catch (err) {
+        if (err instanceof store.LeaseError) return fail({ ok: false, error: err.message });
+        throw err;
+      }
+    },
+  );
+
+  server.registerTool(
+    "peek",
+    {
+      title: "Peek messages",
+      description:
+        "Preview your unread messages without advancing your read position (recv consumes them; peek does not). Same result shape as recv. Requires the lease token from open.",
+      inputSchema: { channel, as, token },
+    },
+    async (args) => {
+      try {
+        const { messages, remaining } = await store.peek(
+          db,
+          args.channel,
+          args.as,
+          args.token,
+          now(),
+        );
+        await maybeSweep();
+        return json({
+          channel: args.channel,
+          count: messages.length,
+          messages,
+          remaining,
+          hasMore: remaining > 0,
+        });
       } catch (err) {
         if (err instanceof store.LeaseError) return fail({ ok: false, error: err.message });
         throw err;

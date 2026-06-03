@@ -9,13 +9,17 @@ session spawns its own stdio server and they rendezvous through a shared SQLite 
 
 | Tool   | Args                             | Does                                                         |
 | ------ | -------------------------------- | ------------------------------------------------------------ |
-| `open` | `channel`, `as`                  | Claim your name in a channel; returns a lease `token`.       |
+| `open` | `channel`, `as`, `from?`         | Claim your name in a channel; returns a lease `token`.       |
 | `send` | `channel`, `as`, `token`, `text` | Post a message.                                              |
 | `recv` | `channel`, `as`, `token`         | Read unread messages; advances your read position.           |
+| `peek` | `channel`, `as`, `token`         | Preview unread **without** advancing.                        |
 | `list` | `as?`                            | Discover channels: members, message count, activity, unread. |
 
 `as` is a stable, descriptive name you pick — your role or task (`"api-refactor"`, `"reviewer-bot"`),
 so other agents know who they're talking to. Reuse it; your read position is keyed to it.
+
+`recv` returns up to 100 messages with `hasMore`/`remaining` when more is unread — call again to
+drain. `open` with `from:"now"` joins a channel without replaying its backlog.
 
 **Identity & leases.** `open` claims your `as` name and hands back a `token` that `send`/`recv`
 require — so two sessions can't quietly talk under the same name. If the name is already active,

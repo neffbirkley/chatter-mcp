@@ -23,16 +23,16 @@ test("send -> recv roundtrip, cursor advances", async () => {
 
   const first = await store.recv(db, "general", "alice", alice, 4);
   assert.deepEqual(
-    first.map((m) => m.text),
+    first.messages.map((m) => m.text),
     ["hello", "world"],
   );
 
   // Cursor advanced: nothing new on a second read.
-  assert.equal((await store.recv(db, "general", "alice", alice, 5)).length, 0);
+  assert.equal((await store.recv(db, "general", "alice", alice, 5)).messages.length, 0);
 
   await store.send(db, "general", "bob", bob, "again", 6);
   assert.deepEqual(
-    (await store.recv(db, "general", "alice", alice, 7)).map((m) => m.text),
+    (await store.recv(db, "general", "alice", alice, 7)).messages.map((m) => m.text),
     ["again"],
   );
 });
@@ -43,7 +43,7 @@ test("late joiner gets backlog", async () => {
   await store.send(db, "room", "bob", bob, "before you joined", 1);
   const carol = await claim(db, "room", "carol", 2);
   assert.deepEqual(
-    (await store.recv(db, "room", "carol", carol, 3)).map((m) => m.text),
+    (await store.recv(db, "room", "carol", carol, 3)).messages.map((m) => m.text),
     ["before you joined"],
   );
 });
@@ -56,7 +56,7 @@ test("participants have independent cursors", async () => {
   const bob = await claim(db, "c", "bob", 3);
   await store.recv(db, "c", "alice", alice, 4); // alice drains
   // bob has never read -> still sees it
-  assert.equal((await store.recv(db, "c", "bob", bob, 5)).length, 1);
+  assert.equal((await store.recv(db, "c", "bob", bob, 5)).messages.length, 1);
 });
 
 test("list reports discovery fields and per-participant unread", async () => {
@@ -82,11 +82,90 @@ test("list reports discovery fields and per-participant unread", async () => {
   assert.equal(anon.find((c) => c.channel === "a")?.messages, 2);
 });
 
-test("send/recv reject a wrong token", async () => {
+test("send/recv/peek reject a wrong token", async () => {
   const db = mem();
   await claim(db, "c", "alice");
   await assert.rejects(() => store.send(db, "c", "alice", "not-the-token", "hi", 2), LeaseError);
   await assert.rejects(() => store.recv(db, "c", "alice", "not-the-token", 3), LeaseError);
+  await assert.rejects(() => store.peek(db, "c", "alice", "not-the-token", 4), LeaseError);
+});
+
+test("recv reports remaining beyond the batch", async () => {
+  const db = mem();
+  const alice = await claim(db, "c", "alice");
+  const bob = await claim(db, "c", "bob");
+  for (let i = 0; i < 3; i++) await store.send(db, "c", "bob", bob, `m${i}`, i + 1);
+
+  const first = await store.recv(db, "c", "alice", alice, 10, 2); // limit 2 of 3
+  assert.deepEqual(
+    first.messages.map((m) => m.text),
+    ["m0", "m1"],
+  );
+  assert.equal(first.remaining, 1);
+
+  const second = await store.recv(db, "c", "alice", alice, 11, 2);
+  assert.deepEqual(
+    second.messages.map((m) => m.text),
+    ["m2"],
+  );
+  assert.equal(second.remaining, 0);
+});
+
+test("peek previews without advancing the cursor", async () => {
+  const db = mem();
+  const alice = await claim(db, "c", "alice");
+  const bob = await claim(db, "c", "bob");
+  await store.send(db, "c", "bob", bob, "hi", 1);
+
+  assert.deepEqual(
+    (await store.peek(db, "c", "alice", alice, 2)).messages.map((m) => m.text),
+    ["hi"],
+  );
+  // Still there on a second peek — not consumed.
+  assert.deepEqual(
+    (await store.peek(db, "c", "alice", alice, 3)).messages.map((m) => m.text),
+    ["hi"],
+  );
+  // recv still delivers it, then it's drained.
+  assert.equal((await store.recv(db, "c", "alice", alice, 4)).messages.length, 1);
+  assert.equal((await store.peek(db, "c", "alice", alice, 5)).messages.length, 0);
+});
+
+test("open from 'now' skips the backlog for a new join", async () => {
+  const db = mem();
+  const bob = await claim(db, "c", "bob");
+  await store.send(db, "c", "bob", bob, "old1", 1);
+  await store.send(db, "c", "bob", bob, "old2", 2);
+
+  const late = await store.open(db, "c", "carol", 3, "now");
+  assert.ok(late.granted);
+  if (!late.granted) return;
+  assert.equal((await store.recv(db, "c", "carol", late.token, 4)).messages.length, 0);
+
+  await store.send(db, "c", "bob", bob, "new", 5);
+  assert.deepEqual(
+    (await store.recv(db, "c", "carol", late.token, 6)).messages.map((m) => m.text),
+    ["new"],
+  );
+});
+
+test("open from 'now' is ignored when reclaiming (keeps read position)", async () => {
+  const db = mem();
+  const t0 = 1_000;
+  await claim(db, "c", "alice", t0);
+  const bob = await claim(db, "c", "bob", t0);
+  await store.send(db, "c", "bob", bob, "m1", t0); // alice has not read it
+
+  const reclaim = await store.open(db, "c", "alice", t0 + LEASE_TTL_MS + 1, "now");
+  assert.ok(reclaim.granted);
+  if (!reclaim.granted) return;
+  // from:'now' ignored on reclaim — the unread message is still delivered.
+  assert.deepEqual(
+    (await store.recv(db, "c", "alice", reclaim.token, t0 + LEASE_TTL_MS + 2)).messages.map(
+      (m) => m.text,
+    ),
+    ["m1"],
+  );
 });
 
 test("open rejects a name with a fresh lease, reclaims a stale one", async () => {
@@ -124,7 +203,7 @@ test("reclaim keeps the existing read position", async () => {
   await store.send(db, "c", "bob", bob, "m2", t0 + LEASE_TTL_MS + 2);
   // Resumes from where she left off — only the new message.
   assert.deepEqual(
-    (await store.recv(db, "c", "alice", a2, t0 + LEASE_TTL_MS + 3)).map((m) => m.text),
+    (await store.recv(db, "c", "alice", a2, t0 + LEASE_TTL_MS + 3)).messages.map((m) => m.text),
     ["m2"],
   );
 });

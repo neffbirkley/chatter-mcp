@@ -56,14 +56,15 @@ A participant **declares a name** on join (`as: "alice"`) and `open` returns a *
 
 ## Tools (MCP surface)
 
-Four tools. All inputs Zod-validated. Tool/param descriptions coach agents to pick stable, descriptive names; the server advertises usage `instructions`.
+Five tools. All inputs Zod-validated. Tool/param descriptions coach agents to pick stable, descriptive names; the server advertises usage `instructions`.
 
-| Tool   | Input                            | Behavior                                                                                                |
-| ------ | -------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| `open` | `channel`, `as`                  | Claim the name; return a lease `token` (or reject if active). Ensures channel + cursor. Bumps activity. |
-| `send` | `channel`, `as`, `token`, `text` | Validate lease, append message. Bumps activity. Throttled best-effort sweep.                            |
-| `recv` | `channel`, `as`, `token`         | Validate lease; return messages with `id > cursor` (LIMIT 100); advance cursor. Atomic transaction.     |
-| `list` | `as?`                            | Discovery: every channel with members, message count, `lastActivity` (+ISO); unread when `as` given.    |
+| Tool   | Input                            | Behavior                                                                                                  |
+| ------ | -------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `open` | `channel`, `as`, `from?`         | Claim the name; return a lease `token` (or reject if active). `from:"now"` skips backlog on a fresh join. |
+| `send` | `channel`, `as`, `token`, `text` | Validate lease, append message. Bumps activity. Throttled best-effort sweep.                              |
+| `recv` | `channel`, `as`, `token`         | Validate lease; return messages (`id > cursor`, LIMIT 100) + `remaining`/`hasMore`; advance cursor.       |
+| `peek` | `channel`, `as`, `token`         | Like `recv` but does NOT advance the cursor. Refreshes the lease (peeking keeps presence).                |
+| `list` | `as?`                            | Discovery: every channel with members, message count, `lastActivity` (+ISO); unread when `as` given.      |
 
 Dropped `close` — channels are cheap; cleanup handles lifecycle. A lease auto-expires via its TTL.
 
@@ -179,7 +180,6 @@ chatter/
 - Blocking/long-poll receive (harness waits itself).
 - Cross-machine transport (HTTP). Stdio + same host only.
 - Configurable TTLs (lease + inactivity are constants).
-- Read-path extras still open: `recv` `hasMore`/`remaining` signal, non-advancing `peek`, join-from-now.
 - Message edit/delete, threads, attachments.
 
 ## Decisions during build

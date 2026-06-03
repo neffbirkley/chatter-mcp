@@ -19,12 +19,21 @@ export type OpenResult =
   | { granted: true; token: string }
   | { granted: false; retryAfterMs: number };
 
+/** Where a brand-new participant starts reading. */
+export type From = "start" | "now";
+
 export interface Message {
   id: number;
   channel: string;
   sender: string;
   text: string;
   ts: number;
+}
+
+/** A batch of messages plus how many remain unread beyond it. */
+export interface Batch {
+  messages: Message[];
+  remaining: number;
 }
 
 export interface ChannelSummary {
@@ -81,6 +90,7 @@ export function open(
   channel: string,
   participant: string,
   now: number,
+  from: From = "start",
 ): Promise<OpenResult> {
   return db.transaction().execute(async (trx): Promise<OpenResult> => {
     await touchChannel(trx, channel, now);
@@ -95,10 +105,22 @@ export function open(
       return { granted: false, retryAfterMs: LEASE_TTL_MS - (now - row.last_active) };
     }
 
+    // A brand-new participant may skip the backlog ("now"); a reclaim keeps its
+    // existing read position (the onConflict path leaves last_seen_id untouched).
+    let initial = 0;
+    if (row === undefined && from === "now") {
+      const top = await trx
+        .selectFrom("messages")
+        .select((eb) => eb.fn.max("id").as("maxId"))
+        .where("channel", "=", channel)
+        .executeTakeFirst();
+      initial = Number(top?.maxId ?? 0);
+    }
+
     const token = randomUUID();
     await trx
       .insertInto("cursors")
-      .values({ channel, participant, last_seen_id: 0, token, last_active: now })
+      .values({ channel, participant, last_seen_id: initial, token, last_active: now })
       .onConflict((oc) =>
         oc.columns(["channel", "participant"]).doUpdateSet({ token, last_active: now }),
       )
@@ -125,9 +147,33 @@ export async function send(
   return Number(inserted.insertId);
 }
 
+/** Count messages in a channel with id greater than a cursor. */
+async function countAfter(exec: Database, channel: string, afterId: number): Promise<number> {
+  const row = await exec
+    .selectFrom("messages")
+    .select((eb) => eb.fn.countAll().as("n"))
+    .where("channel", "=", channel)
+    .where("id", ">", afterId)
+    .executeTakeFirst();
+  return Number(row?.n ?? 0);
+}
+
+/** Read unread messages after a cursor (oldest first, capped). */
+function unreadSince(exec: Database, channel: string, since: number, limit: number) {
+  return exec
+    .selectFrom("messages")
+    .select(["id", "channel", "sender", "text", "ts"])
+    .where("channel", "=", channel)
+    .where("id", ">", since)
+    .orderBy("id", "asc")
+    .limit(limit)
+    .execute();
+}
+
 /**
  * Return unread messages for a participant (oldest first, capped) and advance
  * the participant's cursor past them, atomically. Requires a valid lease token.
+ * `remaining` reports how many messages are still unread beyond this batch.
  */
 export function recv(
   db: Database,
@@ -136,8 +182,8 @@ export function recv(
   token: string,
   now: number,
   limit = 100,
-): Promise<Message[]> {
-  return db.transaction().execute(async (trx) => {
+): Promise<Batch> {
+  return db.transaction().execute(async (trx): Promise<Batch> => {
     await refreshLease(trx, channel, participant, token, now);
 
     const cursor = await trx
@@ -148,28 +194,49 @@ export function recv(
       .executeTakeFirst();
     const since = cursor?.last_seen_id ?? 0;
 
-    const rows = await trx
-      .selectFrom("messages")
-      .select(["id", "channel", "sender", "text", "ts"])
-      .where("channel", "=", channel)
-      .where("id", ">", since)
-      .orderBy("id", "asc")
-      .limit(limit)
+    const messages = await unreadSince(trx, channel, since, limit);
+
+    const last = messages.at(-1);
+    if (!last) return { messages, remaining: 0 };
+
+    await trx
+      .insertInto("cursors")
+      .values({ channel, participant, last_seen_id: last.id })
+      .onConflict((oc) =>
+        oc.columns(["channel", "participant"]).doUpdateSet({ last_seen_id: last.id }),
+      )
       .execute();
 
-    const last = rows.at(-1);
-    if (last) {
-      await trx
-        .insertInto("cursors")
-        .values({ channel, participant, last_seen_id: last.id })
-        .onConflict((oc) =>
-          oc.columns(["channel", "participant"]).doUpdateSet({ last_seen_id: last.id }),
-        )
-        .execute();
-    }
-
-    return rows;
+    return { messages, remaining: await countAfter(trx, channel, last.id) };
   });
+}
+
+/**
+ * Like recv, but does NOT advance the cursor — preview unread messages without
+ * consuming them. Refreshes the lease (peeking keeps your presence alive).
+ * Requires a valid lease token.
+ */
+export async function peek(
+  db: Database,
+  channel: string,
+  participant: string,
+  token: string,
+  now: number,
+  limit = 100,
+): Promise<Batch> {
+  await refreshLease(db, channel, participant, token, now);
+
+  const cursor = await db
+    .selectFrom("cursors")
+    .select("last_seen_id")
+    .where("channel", "=", channel)
+    .where("participant", "=", participant)
+    .executeTakeFirst();
+  const since = cursor?.last_seen_id ?? 0;
+
+  const messages = await unreadSince(db, channel, since, limit);
+  const last = messages.at(-1);
+  return { messages, remaining: last ? await countAfter(db, channel, last.id) : 0 };
 }
 
 /**
