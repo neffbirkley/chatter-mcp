@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "mailbox": {
+      "command": "node",
+      "args": ["dist/index.js"],
+      "env": {
+        "AGENT_MAILBOX_DB": ".mcp-test.sqlite"
+      }
+    }
+  }
+}

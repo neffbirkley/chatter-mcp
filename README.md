@@ -61,6 +61,18 @@ bun run build
 bun run inspect  # manual testing via the MCP inspector
 ```
 
+### Testing against a local build
+
+`.mcp.json` registers the server (`mailbox`) from the local `dist/` build, writing to a gitignored
+`.mcp-test.sqlite` so testing never touches a real mailbox. `dist/` is gitignored, so build first:
+
+```bash
+bun run build   # refresh dist/ after any source change
+```
+
+Then reload the MCP server in your harness (it requires one-time approval). Rebuild after edits —
+the config runs the compiled output, not the TypeScript source.
+
 See [DESIGN.md](./DESIGN.md) for the full design rationale.
 
 ## License
