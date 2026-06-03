@@ -12,35 +12,39 @@ const channel = z
   .min(1)
   .max(200)
   .describe(
-    "Channel name — a short topic/purpose label other agents can discover and recognize (e.g. 'auth-migration', 'release-2.0'). Shared across all sessions on this machine; created on first use.",
+    "Channel name — a short topic/purpose label others can recognize and discover (e.g. 'auth-migration', 'release-2.0'). Shared across all sessions on this machine; created on first use.",
   );
 const as = z
   .string()
   .min(1)
   .max(100)
   .describe(
-    "A stable, human-meaningful name identifying you to other agents — your role or task, not a random id (e.g. 'backend-refactor', 'alice-reviewer'). Reuse the same name across calls; your read position is keyed to it.",
+    "The name you go by to other agents — stable and descriptive of your role or task (e.g. 'backend-refactor', 'alice-reviewer'), not a random id, so others know who they're talking to. Reuse it across calls; your read position and lease are keyed to it.",
   );
-const text = z.string().min(1).max(64_000).describe("Message body.");
+const text = z
+  .string()
+  .min(1)
+  .max(64_000)
+  .describe("The message to post (plain text, or your own structured format).");
 const token = z
   .string()
   .min(1)
   .max(100)
-  .describe("Your lease token from `open`. Proves you hold this name; required to send and recv.");
+  .describe(
+    "The lease token returned by open. Proves you currently hold this name in the channel; required for send, recv, and peek.",
+  );
 const from = z
   .enum(["start", "now"])
   .default("start")
   .describe(
-    "Where a new join starts reading: 'start' replays channel history, 'now' skips the backlog. Ignored when reclaiming a name you already hold.",
+    "For a new join: 'start' replays the channel's history, 'now' skips it and reads only messages sent after you join. Ignored when you already hold the name (you keep your read position).",
   );
 
 const INSTRUCTIONS =
-  "chatter lets independent agent sessions talk over shared, named channels on this machine. " +
-  "Identify yourself with a stable, descriptive `as` name — your role or task ('api-refactor', 'reviewer-bot'), not a random id — so other agents know who they're talking to; reuse it for the whole session. " +
-  "Name channels by topic/purpose ('auth-migration', 'release-2.0') so others can find them. " +
-  "Call `open` to claim your `as` name in a channel and receive a lease token, then `send`/`recv` with that token. " +
-  "If `open` is rejected, the name is active under another session — pick a different name. " +
-  "Use `list` to discover channels and who's in them. recv polls (chatter does not push) and returns `hasMore` when more unread remains than one batch; `peek` previews without consuming.";
+  "chatter lets separate agent sessions on this machine coordinate by leaving messages in shared, named channels — for handing off work, sharing findings, or asking another session for input. " +
+  "Pick a stable name for yourself with `as` that describes your role or task (e.g. 'api-refactor', 'release-reviewer'), not a random id — other agents see this name on your messages, so a meaningful one tells them who they're talking to. Reuse it for the whole session. Name channels by topic so others can find them (e.g. 'auth-migration'). " +
+  "Typical flow: (1) `list` to see existing channels and who's in them; (2) `open` a channel under your name to get a lease token — this reserves the name so two sessions can't post as the same person; if `open` is rejected, that name is in use, so pick another; (3) `send` with the token to post, `recv` with the token to read. " +
+  "chatter never interrupts you — it only hands over messages when you `recv`, so check whenever you'd want an update from other agents. `recv` returns `hasMore: true` when more than one batch is waiting; call again to drain. Use `peek` to look without marking messages read.";
 
 // Output schemas — clients with structured-output support read these; others
 // fall back to the JSON text content.
@@ -124,7 +128,7 @@ export function createServer({ db = openDb(), now = Date.now }: ServerDeps = {})
     {
       title: "Open channel",
       description:
-        "Claim your name in a channel and receive a lease token, required before send/recv. The channel is created if needed. Rejected if the name is currently active under another session — pick a different name and retry. Use from:'now' to skip the backlog on a fresh join.",
+        "Claim a name in a channel and get a lease token (required for send/recv); creates the channel if new. Call once per channel, then reuse the returned token. If the name is already active under another session, the call is rejected with a retry time — choose a different name. Pass from:'now' to read only new messages instead of replaying history.",
       inputSchema: { channel, as, from },
       outputSchema: openOut,
     },
@@ -151,7 +155,8 @@ export function createServer({ db = openDb(), now = Date.now }: ServerDeps = {})
     "send",
     {
       title: "Send message",
-      description: "Post a message to a channel. Requires the lease token from open.",
+      description:
+        "Post a message to a channel. Requires the lease token from open. Returns `listeners` — how many other participants are present; if 0, no one is currently there to read it.",
       inputSchema: { channel, as, token, text },
       outputSchema: sendOut,
     },
@@ -172,7 +177,7 @@ export function createServer({ db = openDb(), now = Date.now }: ServerDeps = {})
     {
       title: "Receive messages",
       description:
-        "Return messages you have not seen yet on a channel (oldest first, up to 100) and advance your read position. Requires the lease token from open. Polling — chatter does not push. `hasMore`/`remaining` indicate unread messages beyond this batch — call again to drain them.",
+        "Read messages you haven't seen yet (oldest first, up to 100) and advance your read position past them. Requires the lease token from open. chatter doesn't push, so call this whenever you want to check for new messages. `hasMore: true` means more is waiting — call again to keep draining.",
       inputSchema: { channel, as, token },
       outputSchema: batchOut,
     },
@@ -204,7 +209,7 @@ export function createServer({ db = openDb(), now = Date.now }: ServerDeps = {})
     {
       title: "Peek messages",
       description:
-        "Preview your unread messages without advancing your read position (recv consumes them; peek does not). Same result shape as recv. Requires the lease token from open.",
+        "Preview unread messages without marking them read — same result as recv, but your read position doesn't move, so a later recv still delivers them. Use to glance at a channel without consuming it. Requires the lease token from open.",
       inputSchema: { channel, as, token },
       outputSchema: batchOut,
     },
@@ -236,7 +241,7 @@ export function createServer({ db = openDb(), now = Date.now }: ServerDeps = {})
     {
       title: "List channels",
       description:
-        "Discover channels: each channel with its members, message count, and last activity, most recently active first. Optionally pass `as` to also get your unread count per channel.",
+        "Discover channels: each with its participants (`members`), message count, and last activity, most recent first. Pass your `as` name to also get your unread count per channel. Use before joining to see what exists and who's in it.",
       inputSchema: { as: as.optional() },
       outputSchema: listOut,
     },
