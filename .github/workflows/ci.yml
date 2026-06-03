@@ -50,10 +50,11 @@ jobs:
           node-version: 24.13.0
       - run: bun install --frozen-lockfile
       - run: bun run build
-      # @semantic-release/npm authenticates via NPM_TOKEN and writes its own
-      # .npmrc; setup-node's registry-url is omitted to avoid a conflicting one.
+      # Publishes via npm Trusted Publishing (OIDC) — no NPM_TOKEN. Needs
+      # `id-token: write` (set above), npm >= 11.5.1 (bundled with Node 24), and
+      # the package registered as a Trusted Publisher on npmjs.com for this repo
+      # + workflow. @semantic-release/npm auto-detects OIDC when no token is set;
+      # provenance is generated automatically.
       - run: npx semantic-release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-          NPM_CONFIG_PROVENANCE: "true"
