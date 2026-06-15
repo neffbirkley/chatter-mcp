@@ -8,7 +8,9 @@ Multiple agent sessions run on one machine. There's no built-in way for them to 
 
 ## Core constraint
 
-An agent only acts on its turn. An MCP server is passive: it answers tool calls, it cannot push a new turn into an idle session. MCP server→client notifications exist but harnesses don't spawn a fresh agent turn from them. So **receiving cannot be event-driven** — it reduces to polling. Modern harnesses can choose to wait/poll themselves, so we do not bake blocking into the server.
+An agent only acts on its turn. An MCP server is passive: it answers tool calls, it cannot push a new turn into an idle session. MCP server→client notifications exist but harnesses don't spawn a fresh agent turn from them. So **receiving cannot be event-driven** — it reduces to polling.
+
+But _where_ the polling happens matters. An agent that busy-polls `recv` burns a full LLM turn per check, and the gap between a peer posting and the agent next polling is a race window (the original `evaluate AX` feedback hit exactly this coordinating over a shared resource). So `recv`/`peek` long-poll **inside the server**: a single call parks and re-checks the DB on a cheap interval, returning the instant a message lands. The agent makes one blocking call instead of a spin loop, and the race window shrinks to the poll interval. This is still polling — just moved off the expensive LLM-turn axis onto a cheap intra-process one. The wait is bounded (`MAX_WAIT_MS`, under the MCP request timeout) and holds no write lock, so it never stalls the broker.
 
 ## Model: shared mailbox-style channels (not sockets)
 
@@ -57,19 +59,24 @@ A participant **declares a name** on join (`as: "alice"`) and `open` returns a *
 
 ## Tools (MCP surface)
 
-Five tools. All inputs Zod-validated. Tool/param descriptions coach agents to pick stable, descriptive names; the server advertises usage `instructions`.
+Six tools. All inputs Zod-validated. Tool/param descriptions coach agents to pick stable, descriptive names; the server advertises usage `instructions`.
 
-| Tool   | Input                            | Behavior                                                                                                  |
-| ------ | -------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| `open` | `channel`, `as`, `from?`         | Claim the name; return a lease `token` (or reject if active). `from:"now"` skips backlog on a fresh join. |
-| `send` | `channel`, `as`, `token`, `text` | Validate lease, append message. Bumps activity. Throttled best-effort sweep.                              |
-| `recv` | `channel`, `as`, `token`         | Validate lease; return messages (`id > cursor`, LIMIT 100) + `remaining`/`hasMore`; advance cursor.       |
-| `peek` | `channel`, `as`, `token`         | Like `recv` but does NOT advance the cursor. Refreshes the lease (peeking keeps presence).                |
-| `list` | `as?`                            | Discovery: every channel with members, message count, `lastActivity` (+ISO); unread when `as` given.      |
+| Tool   | Input                                       | Behavior                                                                                                                                                                                                         |
+| ------ | ------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `open` | `channel`, `as`, `from?`                    | Claim the name; return a lease `token` + `backlog` (unread at join), or reject if active. `from:"now"` skips backlog on a fresh join.                                                                            |
+| `send` | `channel`, `as`, `token`, `text`, `to?`     | Validate lease, append message. `to` (recipient names) targets the message; null = broadcast. Bumps activity, throttled sweep.                                                                                   |
+| `recv` | `channel`, `as`, `token`, `waitMs?`         | Validate lease; return messages visible to you (`id > cursor`, LIMIT 100) + `remaining`/`hasMore`; advance cursor. **Blocks** up to `waitMs` (server default 25s, cap 55s) for a message before returning empty. |
+| `peek` | `channel`, `as`, `token`, `waitMs?`, `ids?` | Like `recv` but does NOT advance the cursor. `ids` fetches specific messages (any position) with `acks` — a sender's read-receipt query. Refreshes the lease.                                                    |
+| `ack`  | `channel`, `as`, `token`, `ids`             | Record read receipts for the given message ids (idempotent). Returns how many valid ids were acked.                                                                                                              |
+| `list` | `as?`                                       | Discovery: every channel with members, message count, `lastActivity` (+ISO); unread when `as` given.                                                                                                             |
 
 Dropped `close` — channels are cheap; cleanup handles lifecycle. A lease auto-expires via its TTL.
 
-Every tool declares an `outputSchema` and returns `structuredContent` plus a JSON text fallback. Any handler throw (lease failure, DB error) is mapped to an `isError` result rather than crashing the server. Messages carry `tsIso` (ISO 8601); `send` returns `listeners` (other participants in the channel).
+Every tool declares an `outputSchema` and returns `structuredContent` plus a JSON text fallback. Any handler throw (lease failure, DB error) is mapped to an `isError` result rather than crashing the server. Messages carry `tsIso` (ISO 8601), `to` (recipients, if targeted), and `acks` (who's read them); `send` returns `listeners` (other participants in the channel).
+
+**Blocking recv (long-poll).** Stdio MCP is request/response — the server can't push. `recv`/`peek` with `waitMs > 0` instead poll the DB on a short interval (`POLL_INTERVAL_MS`) until a visible message appears or the deadline passes. The lease is validated once up front (a bad token throws immediately, never parks). **Critically, no write transaction is held across the wait** — each poll is a brief, isolated read-and-advance, so a parked reader never locks out writers. A wait stays well under `LEASE_TTL_MS`, so presence survives without mid-wait writes; an injected `signal` (the MCP request's abort) ends the wait early.
+
+**Targeting & receipts.** `recipients` (JSON array on `messages`, null = broadcast) gates visibility: a message is visible to a viewer iff `recipients IS NULL OR sender = viewer OR viewer ∈ recipients`. The same predicate filters `recv`, `peek`, `countAfter`, the `open` backlog, and `list` unread, so cursors and counts stay consistent. The cursor watermark only ever skips messages the viewer can't see, so it never strands a visible one. `acks` is a separate `(message_id, participant)` table; the sender reads receipts back via `peek ids` or the `acks` field on any returned message.
 
 ## Schema
 
@@ -80,11 +87,12 @@ CREATE TABLE IF NOT EXISTS channels (
   last_activity INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS messages (
-  id      INTEGER PRIMARY KEY AUTOINCREMENT,
-  channel TEXT NOT NULL,
-  sender  TEXT NOT NULL,
-  text    TEXT NOT NULL,
-  ts      INTEGER NOT NULL
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  channel    TEXT NOT NULL,
+  sender     TEXT NOT NULL,
+  text       TEXT NOT NULL,
+  ts         INTEGER NOT NULL,
+  recipients TEXT      -- JSON array of target names; null = broadcast
 );
 CREATE TABLE IF NOT EXISTS cursors (
   channel      TEXT NOT NULL,
@@ -94,14 +102,22 @@ CREATE TABLE IF NOT EXISTS cursors (
   last_active  INTEGER,  -- last activity under the lease, for reclaim
   PRIMARY KEY (channel, participant)
 );
+CREATE TABLE IF NOT EXISTS acks (   -- read receipts: who has read which message
+  message_id  INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+  channel     TEXT NOT NULL,
+  participant TEXT NOT NULL,
+  ts          INTEGER NOT NULL,
+  PRIMARY KEY (message_id, participant)
+);
 CREATE INDEX IF NOT EXISTS idx_msg_channel_id ON messages(channel, id);
+CREATE INDEX IF NOT EXISTS idx_acks_msg ON acks(message_id);
 ```
 
-`recv` query: `SELECT * FROM messages WHERE channel=? AND id > ? ORDER BY id LIMIT 100`, then set cursor to max id. Idempotent, replayable, monotonic.
+`recv` query: `SELECT * FROM messages WHERE channel=? AND id > ? AND <visible-to-viewer> ORDER BY id LIMIT 100`, then set cursor to max id. Idempotent, replayable, monotonic.
 
-`list` unread: `COUNT(*) WHERE channel=? AND id > cursor`. Members derived from distinct message senders ∪ cursor participants.
+`list` unread: `COUNT(*) WHERE channel=? AND id > cursor AND <visible-to-viewer>`. Members derived from distinct message senders ∪ cursor participants.
 
-Schema versioning: `PRAGMA user_version` (now **2**). `applySchema` runs `CREATE TABLE IF NOT EXISTS` then adds missing columns idempotently (`PRAGMA table_info` guard) — the v1→v2 lease columns migrate in place. Tables are `STRICT` for type rigor.
+Schema versioning: `PRAGMA user_version` (now **3**). `applySchema` runs `CREATE TABLE IF NOT EXISTS` then adds missing columns idempotently (`PRAGMA table_info` guard) — v1→v2 added the lease columns, v2→v3 adds `messages.recipients` (the `acks` table is created by the DDL). Tables are `STRICT` for type rigor.
 
 ## Concurrency — required PRAGMAs
 

@@ -107,14 +107,14 @@ test("recv reports remaining beyond the batch", async () => {
   const bob = await claim(db, "c", "bob");
   for (let i = 0; i < 3; i++) await store.send(db, "c", "bob", bob, `m${i}`, i + 1);
 
-  const first = await store.recv(db, "c", "alice", alice, 10, 2); // limit 2 of 3
+  const first = await store.recv(db, "c", "alice", alice, 10, { limit: 2 }); // limit 2 of 3
   assert.deepEqual(
     first.messages.map((m) => m.text),
     ["m0", "m1"],
   );
   assert.equal(first.remaining, 1);
 
-  const second = await store.recv(db, "c", "alice", alice, 11, 2);
+  const second = await store.recv(db, "c", "alice", alice, 11, { limit: 2 });
   assert.deepEqual(
     second.messages.map((m) => m.text),
     ["m2"],
