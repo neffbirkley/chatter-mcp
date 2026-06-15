@@ -1,7 +1,7 @@
 import { createRequire } from "node:module";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import * as store from "chatter-core";
-import { type Database, openDb, sweep } from "chatter-core";
+import { type Database, DEFAULT_WAIT_MS, MAX_WAIT_MS, openDb, sweep } from "chatter-core";
 import { z } from "zod";
 
 const pkg = createRequire(import.meta.url)("../package.json") as { version: string };
@@ -30,7 +30,7 @@ const token = z
   .min(1)
   .max(100)
   .describe(
-    "The lease token returned by open. Proves you currently hold this name in the channel; required for send, recv, and peek.",
+    "The lease token returned by open. Proves you currently hold this name in the channel; required for send, recv, peek, and ack.",
   );
 const from = z
   .enum(["start", "now"])
@@ -38,12 +38,29 @@ const from = z
   .describe(
     "For a new join: 'start' replays the channel's history, 'now' skips it and reads only messages sent after you join. Ignored when you already hold the name (you keep your read position).",
   );
+const to = z
+  .array(z.string().min(1).max(100))
+  .optional()
+  .describe(
+    "Optional recipients: names this message is addressed to. Only they (and you) will receive it. Omit to broadcast to everyone in the channel.",
+  );
+const waitMs = z
+  .number()
+  .int()
+  .min(0)
+  .max(MAX_WAIT_MS)
+  .optional()
+  .describe(
+    `How long (ms) to block waiting for a message when none are unread, instead of returning empty — the long-poll that avoids busy-checking. Defaults to ${DEFAULT_WAIT_MS}; pass 0 to return immediately. Returns as soon as a message arrives.`,
+  );
+const ids = z.array(z.number().int()).describe("Message ids (from send/recv results) to act on.");
 
 const INSTRUCTIONS =
   "chatter lets separate agent sessions on this machine coordinate by leaving messages in shared, named channels — for handing off work, sharing findings, or asking another session for input. " +
   "Pick a stable name for yourself with `as` that describes your role or task (e.g. 'api-refactor', 'release-reviewer'), not a random id — other agents see this name on your messages, so a meaningful one tells them who they're talking to. Reuse it for the whole session. Name channels by topic so others can find them (e.g. 'auth-migration'). " +
-  "Typical flow: (1) `list` to see existing channels and who's in them; (2) `open` a channel under your name to get a lease token — this reserves the name so two sessions can't post as the same person; if `open` is rejected, that name is in use, so pick another; (3) `send` with the token to post, `recv` with the token to read. " +
-  "chatter never interrupts you — it only hands over messages when you `recv`, so check whenever you'd want an update from other agents. `recv` returns `hasMore: true` when more than one batch is waiting; call again to drain. Use `peek` to look without marking messages read.";
+  "Typical flow: (1) `list` to see existing channels and who's in them; (2) `open` a channel under your name to get a lease token — this reserves the name so two sessions can't post as the same person; if `open` is rejected, that name is in use, so pick another; `open` also reports `backlog`, how many messages are already waiting for you. (3) `send` with the token to post, `recv` with the token to read. " +
+  "`recv` blocks by default: it parks for a short while and returns the instant a message arrives, so you can wait on a reply without busy-polling (pass `waitMs: 0` to return immediately). `recv` returns `hasMore: true` when more than one batch is waiting; call again to drain. Use `peek` to look without marking messages read. " +
+  "Address a message to specific agents with `to: [names]` (others won't see it); omit it to broadcast. Confirm you've read a message by calling `ack` with its id — the sender can then see the receipt (acked-by names appear on each message, and a sender can check its own messages with `peek` + `ids`).";
 
 // Output schemas — clients with structured-output support read these; others
 // fall back to the JSON text content.
@@ -54,6 +71,8 @@ const messageOut = z.object({
   text: z.string(),
   ts: z.number().describe("Epoch milliseconds."),
   tsIso: z.string().describe("ISO 8601 timestamp."),
+  to: z.array(z.string()).optional().describe("Recipients, if addressed; absent for a broadcast."),
+  acks: z.array(z.string()).describe("Participants who have acked (read) this message."),
 });
 const channelOut = z.object({
   channel: z.string(),
@@ -63,7 +82,16 @@ const channelOut = z.object({
   lastActivityIso: z.string(),
   unread: z.number().optional(),
 });
-const openOut = { channel: z.string(), as: z.string(), token: z.string() };
+const openOut = {
+  channel: z.string(),
+  as: z.string(),
+  token: z.string(),
+  backlog: z.number().describe("Messages already waiting for you, unread, at open time."),
+};
+const ackOut = {
+  channel: z.string(),
+  acked: z.number().describe("How many of the given messages were recorded as read."),
+};
 const sendOut = {
   id: z.number(),
   channel: z.string(),
@@ -143,7 +171,12 @@ export function createServer({ db = openDb(), now = Date.now }: ServerDeps = {})
             retryAfterMs: result.retryAfterMs,
           });
         }
-        return ok({ channel: args.channel, as: args.as, token: result.token });
+        return ok({
+          channel: args.channel,
+          as: args.as,
+          token: result.token,
+          backlog: result.backlog,
+        });
       } catch (err) {
         return toError(err);
       }
@@ -155,13 +188,21 @@ export function createServer({ db = openDb(), now = Date.now }: ServerDeps = {})
     {
       title: "Send message",
       description:
-        "Post a message to a channel. Requires the lease token from open. Returns `listeners` — how many other participants are present; if 0, no one is currently there to read it.",
-      inputSchema: { channel, as, token, text },
+        "Post a message to a channel. Requires the lease token from open. Address it to specific agents with `to: [names]`, or omit `to` to broadcast. Returns `listeners` — how many other participants are present; if 0, no one is currently there to read it.",
+      inputSchema: { channel, as, token, text, to },
       outputSchema: sendOut,
     },
     async (args) => {
       try {
-        const id = await store.send(db, args.channel, args.as, args.token, args.text, now());
+        const id = await store.send(
+          db,
+          args.channel,
+          args.as,
+          args.token,
+          args.text,
+          now(),
+          args.to,
+        );
         const listeners = await store.listenerCount(db, args.channel, args.as);
         await maybeSweep();
         return ok({ id, channel: args.channel, listeners });
@@ -176,11 +217,11 @@ export function createServer({ db = openDb(), now = Date.now }: ServerDeps = {})
     {
       title: "Receive messages",
       description:
-        "Read messages you haven't seen yet (oldest first, up to 100) and advance your read position past them. Requires the lease token from open. chatter doesn't push, so call this whenever you want to check for new messages. `hasMore: true` means more is waiting — call again to keep draining.",
-      inputSchema: { channel, as, token },
+        "Read messages you haven't seen yet (oldest first, up to 100) and advance your read position past them. Requires the lease token from open. Blocks by default until a message arrives (pass `waitMs: 0` to return immediately, or a custom timeout). `hasMore: true` means more is waiting — call again to keep draining.",
+      inputSchema: { channel, as, token, waitMs },
       outputSchema: batchOut,
     },
-    async (args) => {
+    async (args, extra) => {
       try {
         const { messages, remaining } = await store.recv(
           db,
@@ -188,6 +229,10 @@ export function createServer({ db = openDb(), now = Date.now }: ServerDeps = {})
           args.as,
           args.token,
           now(),
+          {
+            waitMs: args.waitMs ?? DEFAULT_WAIT_MS,
+            signal: extra?.signal,
+          },
         );
         await maybeSweep();
         return ok({
@@ -208,18 +253,40 @@ export function createServer({ db = openDb(), now = Date.now }: ServerDeps = {})
     {
       title: "Peek messages",
       description:
-        "Preview unread messages without marking them read — same result as recv, but your read position doesn't move, so a later recv still delivers them. Use to glance at a channel without consuming it. Requires the lease token from open.",
-      inputSchema: { channel, as, token },
+        "Preview unread messages without marking them read — same result as recv, but your read position doesn't move, so a later recv still delivers them. Pass `ids` to instead fetch specific messages by id (e.g. ones you sent) to inspect their `acks` read receipts. Returns immediately by default; pass `waitMs` to block for new messages. Requires the lease token from open.",
+      inputSchema: { channel, as, token, waitMs, ids: ids.optional() },
       outputSchema: batchOut,
     },
-    async (args) => {
+    async (args, extra) => {
       try {
+        if (args.ids !== undefined) {
+          const messages = await store.receipts(
+            db,
+            args.channel,
+            args.as,
+            args.token,
+            now(),
+            args.ids,
+          );
+          await maybeSweep();
+          return ok({
+            channel: args.channel,
+            count: messages.length,
+            messages,
+            remaining: 0,
+            hasMore: false,
+          });
+        }
         const { messages, remaining } = await store.peek(
           db,
           args.channel,
           args.as,
           args.token,
           now(),
+          {
+            waitMs: args.waitMs ?? 0,
+            signal: extra?.signal,
+          },
         );
         await maybeSweep();
         return ok({
@@ -229,6 +296,26 @@ export function createServer({ db = openDb(), now = Date.now }: ServerDeps = {})
           remaining,
           hasMore: remaining > 0,
         });
+      } catch (err) {
+        return toError(err);
+      }
+    },
+  );
+
+  server.registerTool(
+    "ack",
+    {
+      title: "Acknowledge messages",
+      description:
+        "Confirm you've read one or more messages (by id, from recv/send results). Records a read receipt the sender can observe — message `acks` lists who acked, and a sender can check its own messages with peek + `ids`. Requires the lease token from open.",
+      inputSchema: { channel, as, token, ids },
+      outputSchema: ackOut,
+    },
+    async (args) => {
+      try {
+        const acked = await store.ack(db, args.channel, args.as, args.token, now(), args.ids);
+        await maybeSweep();
+        return ok({ channel: args.channel, acked });
       } catch (err) {
         return toError(err);
       }

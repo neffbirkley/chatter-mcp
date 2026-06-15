@@ -7,19 +7,29 @@ session spawns its own stdio server and they rendezvous through a shared SQLite 
 
 ## Tools
 
-| Tool   | Args                             | Does                                                         |
-| ------ | -------------------------------- | ------------------------------------------------------------ |
-| `open` | `channel`, `as`, `from?`         | Claim your name in a channel; returns a lease `token`.       |
-| `send` | `channel`, `as`, `token`, `text` | Post a message.                                              |
-| `recv` | `channel`, `as`, `token`         | Read unread messages; advances your read position.           |
-| `peek` | `channel`, `as`, `token`         | Preview unread **without** advancing.                        |
-| `list` | `as?`                            | Discover channels: members, message count, activity, unread. |
+| Tool   | Args                                        | Does                                                                                |
+| ------ | ------------------------------------------- | ----------------------------------------------------------------------------------- |
+| `open` | `channel`, `as`, `from?`                    | Claim your name; returns a lease `token` + `backlog` count.                         |
+| `send` | `channel`, `as`, `token`, `text`, `to?`     | Post a message; `to` targets specific recipients.                                   |
+| `recv` | `channel`, `as`, `token`, `waitMs?`         | Read unread messages; **blocks** for one by default. Advances your read position.   |
+| `peek` | `channel`, `as`, `token`, `waitMs?`, `ids?` | Preview unread **without** advancing; `ids` fetches messages + their read receipts. |
+| `ack`  | `channel`, `as`, `token`, `ids`             | Confirm messages read — a receipt the sender can see.                               |
+| `list` | `as?`                                       | Discover channels: members, message count, activity, unread.                        |
 
 `as` is a stable, descriptive name you pick — your role or task (`"api-refactor"`, `"reviewer-bot"`),
 so other agents know who they're talking to. Reuse it; your read position is keyed to it.
 
-`recv` returns up to 100 messages with `hasMore`/`remaining` when more is unread — call again to
-drain. `open` with `from:"now"` joins a channel without replaying its backlog.
+**Waiting without busy-polling.** `recv` blocks by default — it parks briefly and returns the instant
+a message arrives, so you can wait on a reply instead of re-checking in a loop. Pass `waitMs: 0` to
+return immediately, or a custom timeout (capped at 55s, under the typical MCP request timeout). It
+still returns up to 100 messages with `hasMore`/`remaining` — call again to drain.
+
+**Targeting & read receipts.** Address a message to specific agents with `to: ["bob"]` (others won't
+receive it); omit `to` to broadcast. Confirm receipt with `ack` — each message then carries the
+`acks` names of who read it, and a sender can poll its own messages with `peek` + `ids`.
+
+`open` joins a channel and reports `backlog` (how many messages are already waiting for you), so a
+late joiner never silently misses history; `from:"now"` opts out of the backlog (`backlog: 0`).
 
 Every tool returns typed `structuredContent` (with a JSON text fallback); messages include an ISO
 `tsIso`, `send` reports `listeners` (other participants), and failures come back as `isError`.
@@ -50,16 +60,19 @@ pruned automatically.
 scripts, and harness hooks that can't speak MCP per-prompt:
 
 ```bash
-npx @neffbirkley/chatter-cli open inbox alice          # -> { ...token }
-chatter send inbox alice <token> "ping"
-chatter recv inbox alice <token>                       # JSON, advances your cursor
-chatter list                                           # discover channels + members
+npx @neffbirkley/chatter-cli open inbox alice              # -> { ...token, backlog }
+chatter send inbox alice <token> "ping" --to bob           # --to targets recipients
+chatter recv inbox alice <token> --wait-ms 5000            # JSON; --wait-ms blocks for a message
+chatter ack  inbox alice <token> --ids 3,4                 # confirm messages read
+chatter peek inbox alice <token> --ids 3                   # check who acked a message you sent
+chatter list                                               # discover channels + members
 ```
 
-Same model and store as the server (open → token, then send/recv/peek/list). Output is JSON.
+Same model and store as the server (open → token, then send/recv/peek/ack/list). Output is JSON.
+The CLI defaults `recv` to return immediately (pass `--wait-ms` to block), so shell scripts and hooks
+don't hang.
 
-**Polling hook** — chatter never pushes, so an agent only sees messages when it reads. Wire a hook
-to inject unread into its context each turn:
+**Polling hook** — wire a hook to inject unread into an agent's context each turn:
 
 ```json
 // .claude/settings.json
